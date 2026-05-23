@@ -1,0 +1,65 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import VMCard from "@/components/VMCard.astro";
+import StatusBadge from "@/components/StatusBadge.astro";
+import { getVmStatuses, getBootstrapPhase, RANGE } from "@/lib/ludus";
+
+const [vms, phase] = await Promise.all([getVmStatuses(), getBootstrapPhase()]);
+const running = vms.filter(v => v.proxmox_state === "running").length;
+const online  = vms.filter(v => v.tailscale_state === "online").length;
+const lockedDown =
+  phase === "lockdown-applied" || phase === "range-up-continuous-sim-running";
+---
+<BaseLayout
+  title="Range overview"
+  lead="Six VMs on one isolated VLAN, joined to your tailnet. Splunk indexes everything. Continuous attacks fire against win-client1 on a 6-hour rotation."
+>
+  <!-- Top stat row -->
+  <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="card card-pad">
+      <div class="h-label">VMs running</div>
+      <div class="mt-1 text-3xl font-semibold text-ink">{running}<span class="text-muted text-lg">/{vms.length}</span></div>
+    </div>
+    <div class="card card-pad">
+      <div class="h-label">Tailscale online</div>
+      <div class="mt-1 text-3xl font-semibold text-ink">{online}<span class="text-muted text-lg">/{vms.length}</span></div>
+    </div>
+    <div class="card card-pad">
+      <div class="h-label">Egress lockdown</div>
+      <div class="mt-2">
+        <StatusBadge tone={lockedDown ? "ok" : "warn"} label={lockedDown ? "locked down" : "bootstrap window"} />
+      </div>
+    </div>
+    <div class="card card-pad">
+      <div class="h-label">Range id</div>
+      <div class="mt-1 font-mono text-3xl text-accent">#{RANGE.id}</div>
+    </div>
+  </section>
+
+  <!-- VM grid -->
+  <section>
+    <h2 class="mb-3 text-lg">Hosts</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {vms.map(vm => <VMCard vm={vm} />)}
+    </div>
+  </section>
+
+  <!-- Quick links -->
+  <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <a href={`http://${RANGE.id}-splunk:8000`} target="_blank" class="card card-pad no-underline hover:border-accent transition-colors">
+      <div class="h-label">Open</div>
+      <div class="mt-1 text-base text-ink">Splunk Web</div>
+      <div class="text-xs text-muted mt-1 font-mono">{`http://${RANGE.id}-splunk:8000`}</div>
+    </a>
+    <a href="/simulate" class="card card-pad no-underline hover:border-accent transition-colors">
+      <div class="h-label">Drive</div>
+      <div class="mt-1 text-base text-ink">Run a technique</div>
+      <div class="text-xs text-muted mt-1">One-off Atomic Red Team simulate via the patched fork.</div>
+    </a>
+    <a href="/network" class="card card-pad no-underline hover:border-accent transition-colors">
+      <div class="h-label">Verify</div>
+      <div class="mt-1 text-base text-ink">Isolation check</div>
+      <div class="text-xs text-muted mt-1">Prove no lab VM can reach the public internet.</div>
+    </a>
+  </section>
+</BaseLayout>

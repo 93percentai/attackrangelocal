@@ -1,0 +1,94 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import StatusBadge from "@/components/StatusBadge.astro";
+import { TECHNIQUES, getAtomicRunnerStatus, RANGE } from "@/lib/ludus";
+
+const target = `${RANGE.id}-winclient1`;
+const status = await getAtomicRunnerStatus(target);
+const tone = status.running ? "ok" : status.installed ? "warn" : "muted";
+const label = status.running ? "running" : status.installed ? "installed · stopped" : "not installed";
+const safe = TECHNIQUES.filter(t => t.loopSafe);
+const destructive = TECHNIQUES.filter(t => !t.loopSafe);
+---
+<BaseLayout
+  title="Continuous simulation"
+  lead="Red Canary's Atomic Runner runs as a Windows service on win-client1. It picks the next enabled technique from a curated schedule, fires it, sleeps, and reboots into the next one. Survives host reboots."
+>
+  <section class="card card-pad space-y-4">
+    <div class="flex items-baseline justify-between">
+      <div>
+        <h2 class="text-lg">Atomic Runner</h2>
+        <p class="text-xs text-muted mt-0.5">Target: <span class="font-mono text-accent">{target}</span></p>
+      </div>
+      <StatusBadge tone={tone} label={label} />
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+      <div>
+        <div class="h-label">Schedule window</div>
+        <div class="mt-1 font-mono text-ink">6 hours</div>
+        <div class="text-xs text-muted mt-0.5">{safe.length} techniques rotated evenly</div>
+      </div>
+      <div>
+        <div class="h-label">Stop file</div>
+        <div class="mt-1 font-mono text-ink">C:\AtomicRunner\stop</div>
+        <div class="text-xs text-muted mt-0.5">Create to halt cleanly</div>
+      </div>
+      <div>
+        <div class="h-label">Service</div>
+        <div class="mt-1 font-mono text-ink">atomicrunnerservice</div>
+        <div class="text-xs text-muted mt-0.5">Auto-start on boot</div>
+      </div>
+    </div>
+
+    <div class="flex gap-2">
+      <form action="/api/continuous" method="post">
+        <input type="hidden" name="action" value="start" />
+        <button class="btn btn-primary">▶  Install / start</button>
+      </form>
+      <form action="/api/continuous" method="post">
+        <input type="hidden" name="action" value="stop" />
+        <button class="btn btn-danger">■  Stop</button>
+      </form>
+      <a href="https://github.com/redcanaryco/invoke-atomicredteam/wiki/Continuous-Atomic-Testing"
+         target="_blank" class="btn">Docs ↗</a>
+    </div>
+
+    {status.log && (
+      <details class="card-pad rounded-md bg-panel2/40 border border-line">
+        <summary class="text-xs text-muted cursor-pointer">service inspection</summary>
+        <pre class="mt-2 text-xs font-mono whitespace-pre-wrap text-ink">{status.log}</pre>
+      </details>
+    )}
+  </section>
+
+  <section class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+    <div class="card card-pad">
+      <h3 class="text-sm mb-2">Enabled in the rotation</h3>
+      <p class="text-xs text-muted mb-3">Each row maps to a line in <span class="kbd">ansible/files/atomic-schedule.csv</span>.</p>
+      <ul class="space-y-1 text-xs font-mono">
+        {safe.map(t => (
+          <li class="flex justify-between gap-2 border-b border-line/60 py-1">
+            <span class="text-accent">{t.id}</span>
+            <span class="text-ink truncate">{t.name}</span>
+            <span class="text-muted">{t.tactic}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+    <div class="card card-pad">
+      <h3 class="text-sm mb-2">Excluded from the loop</h3>
+      <p class="text-xs text-muted mb-3">Destructive or noisy techniques. Use the <a href="/simulate">Simulate</a> tab to run these one-shot.</p>
+      <ul class="space-y-1 text-xs font-mono">
+        {destructive.map(t => (
+          <li class="flex justify-between gap-2 border-b border-line/60 py-1">
+            <span class="text-danger">{t.id}</span>
+            <span class="text-ink truncate">{t.name}</span>
+            <span class="text-muted">{t.tactic}</span>
+          </li>
+        ))}
+        <li class="text-muted pt-2">+ T1485 / T1486 / T1490 / T1491 / T1561 / T1565 / T1529 (never run)</li>
+      </ul>
+    </div>
+  </section>
+</BaseLayout>

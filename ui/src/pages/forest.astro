@@ -1,0 +1,66 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { RANGE } from "@/lib/ludus";
+
+const fqdn = process.env.AD_DOMAIN_FQDN ?? "range.local";
+const admin = process.env.AD_DOMAIN_ADMIN ?? "rangeadmin";
+---
+<BaseLayout
+  title="Active Directory forest"
+  lead="Ludus builds the forest in-line with range deploy. One primary DC, two domain-joined members. Forest root domain shown below."
+>
+  <section class="card card-pad grid grid-cols-1 md:grid-cols-3 gap-6 text-sm">
+    <div>
+      <div class="h-label">Forest root</div>
+      <div class="mt-1 font-mono text-accent text-base">{fqdn}</div>
+    </div>
+    <div>
+      <div class="h-label">Domain admin</div>
+      <div class="mt-1 flex items-center gap-2">
+        <span class="font-mono text-ink">{admin}</span>
+      </div>
+    </div>
+    <div>
+      <div class="h-label">Admin password</div>
+      <div class="mt-1 flex items-center gap-2">
+        <input id="pw" type="password" readonly value={process.env.AD_PASSWORD ?? "—"}
+               class="font-mono bg-panel2 rounded-md border border-line px-2 py-1 text-ink text-xs w-44" />
+        <button id="reveal" class="btn text-xs">show</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="card card-pad">
+    <h2 class="mb-2 text-lg">Topology</h2>
+    <table class="w-full text-sm">
+      <thead class="text-xs uppercase tracking-wider text-muted">
+        <tr><th class="text-left py-2">Host</th><th class="text-left">Role</th><th class="text-left">OS</th><th class="text-right">Last octet</th></tr>
+      </thead>
+      <tbody class="font-mono text-xs">
+        <tr class="border-t border-line"><td class="py-2 text-accent">{RANGE.id}-dc01</td><td>primary-dc · DNS</td><td>Win Server 2022</td><td class="text-right">.5</td></tr>
+        <tr class="border-t border-line"><td class="py-2 text-accent">{RANGE.id}-winclient1</td><td>member</td><td>Windows 11 Enterprise</td><td class="text-right">.20</td></tr>
+        <tr class="border-t border-line"><td class="py-2 text-accent">{RANGE.id}-winsrv1</td><td>member</td><td>Win Server 2022</td><td class="text-right">.21</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card card-pad text-sm">
+    <h2 class="mb-2 text-lg">From the DC</h2>
+    <pre class="rounded-md bg-panel2/40 border border-line p-3 font-mono text-xs whitespace-pre-wrap">ssh {admin}@{RANGE.id}-dc01    # Tailscale SSH
+
+# Inspect the forest
+Get-ADDomain
+Get-ADUser -Filter * | Format-Table SamAccountName, Enabled
+Get-ADComputer -Filter * | Format-Table Name, OperatingSystem</pre>
+  </section>
+
+  <script>
+    document.getElementById("reveal")?.addEventListener("click", (e) => {
+      const i = document.getElementById("pw") as HTMLInputElement;
+      const b = e.currentTarget as HTMLButtonElement;
+      const showing = i.type === "text";
+      i.type = showing ? "password" : "text";
+      b.textContent = showing ? "show" : "hide";
+    });
+  </script>
+</BaseLayout>

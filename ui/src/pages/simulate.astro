@@ -1,0 +1,93 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { TECHNIQUES, VM_INVENTORY, RANGE } from "@/lib/ludus";
+
+const targets = VM_INVENTORY
+  .filter(v => v.role.includes("member") || v.os.startsWith("Win") || v.os.includes("Ubuntu"))
+  .map(v => `${RANGE.id}-${v.name}`);
+---
+<BaseLayout
+  title="Simulate"
+  lead="Trigger one Atomic Red Team technique against a lab host. For continuous fire-and-forget, see the Continuous tab."
+>
+  <section class="card card-pad space-y-4">
+    <form id="sim-form" class="space-y-4">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <label class="space-y-1">
+          <span class="h-label block">Target host</span>
+          <select name="target" class="w-full rounded-md border border-line bg-panel2 px-3 py-2 font-mono text-sm">
+            {targets.map(t => <option value={t}>{t}</option>)}
+          </select>
+        </label>
+        <label class="space-y-1 md:col-span-2">
+          <span class="h-label block">Technique filter</span>
+          <input id="tech-filter" type="text" placeholder="T1059, lsass, discovery…"
+                 class="w-full rounded-md border border-line bg-panel2 px-3 py-2 font-mono text-sm" />
+        </label>
+      </div>
+
+      <div>
+        <span class="h-label block mb-2">Techniques</span>
+        <div id="tech-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-96 overflow-y-auto pr-1">
+          {TECHNIQUES.map(t => (
+            <label class="tech flex items-start gap-2 rounded-md border border-line bg-panel2/60 p-2 cursor-pointer hover:border-accent"
+                   data-search={`${t.id} ${t.name} ${t.tactic}`.toLowerCase()}>
+              <input type="checkbox" name="technique" value={t.id} class="mt-1 accent-cyan-300"/>
+              <div class="text-xs">
+                <div class="font-mono text-accent">{t.id}</div>
+                <div class="text-ink">{t.name}</div>
+                <div class="text-muted mt-0.5">{t.tactic}{t.loopSafe ? "" : " · destructive"}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div class="flex gap-2">
+        <button type="submit" class="btn btn-primary">▶  Run once</button>
+        <button type="button" id="random-btn" class="btn">🎲  Random pick</button>
+        <button type="reset"  class="btn">Clear</button>
+      </div>
+    </form>
+
+    <div id="sim-result" class="hidden card card-pad bg-panel2/40 font-mono text-xs whitespace-pre-wrap"></div>
+  </section>
+
+  <script>
+    const filter = document.getElementById("tech-filter") as HTMLInputElement;
+    filter?.addEventListener("input", () => {
+      const q = filter.value.trim().toLowerCase();
+      document.querySelectorAll<HTMLLabelElement>(".tech").forEach(el => {
+        const txt = el.dataset.search ?? "";
+        el.style.display = !q || txt.includes(q) ? "" : "none";
+      });
+    });
+
+    document.getElementById("random-btn")?.addEventListener("click", () => {
+      const opts = Array.from(document.querySelectorAll<HTMLInputElement>("input[name=technique]"));
+      const safe = opts.filter(o => !/destructive/.test(o.closest(".tech")?.textContent ?? ""));
+      const pick = safe[Math.floor(Math.random() * safe.length)];
+      opts.forEach(o => o.checked = false);
+      if (pick) pick.checked = true;
+      pick?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+
+    document.getElementById("sim-form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.currentTarget as HTMLFormElement;
+      const target = (form.elements.namedItem("target") as HTMLSelectElement).value;
+      const techniques = Array.from(form.querySelectorAll<HTMLInputElement>("input[name=technique]:checked"))
+        .map(i => i.value).join(",");
+      const resBox = document.getElementById("sim-result")!;
+      resBox.classList.remove("hidden");
+      resBox.textContent = `> simulate target=${target} techniques=${techniques || "(none)"}\n…`;
+      const r = await fetch("/api/simulate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ target, techniques }),
+      });
+      const text = await r.text();
+      resBox.textContent += `\n${text}`;
+    });
+  </script>
+</BaseLayout>

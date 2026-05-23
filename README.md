@@ -20,6 +20,9 @@ the WireGuard piece swapped for Tailscale.
   - new `local_ludus` provider (no Terraform, no cloud)
   - WireGuard phase bypassed (Tailscale already provides VPN)
   - new `simulate --loop --random --interval` for continuous attacks
+- A **replacement web UI** (`ui/`) built for this deployment — VM
+  status, AD info, isolation checks, continuous-sim controls — instead
+  of upstream's cloud-provider/WireGuard-sharing UI
 - **Deny-by-default egress** at the Ludus router — lab VMs cannot dial
   the public internet after bootstrap completes
 - An **unattended ISO** (`iso/build-iso.sh`) that installs Proxmox,
@@ -46,6 +49,7 @@ attackrangelocal/
 │   ├── apply-patches.py         #   string-based patcher (idempotent)
 │   └── new-files/               #   files copied in (local_ludus_provider.py, template)
 ├── docker/                      # Compose override that wires the patched fork to Ludus
+├── ui/                          # Replacement Astro web UI (port 4321)
 ├── ansible/                     # Static inventory + Atomic Runner playbook + schedule
 ├── iso/                         # Unattended Proxmox ISO build pipeline
 │   ├── answer.toml.j2           #   Proxmox auto-installer answer file
@@ -134,6 +138,7 @@ Cleanly deregisters Tailscale devices, then destroys the VMs in Proxmox.
 - [`docs/tailscale-acls.md`](docs/tailscale-acls.md) — keep the range off other tailnet devices
 - [`docs/ad-forest.md`](docs/ad-forest.md) — forest topology, credentials, extending
 - [`docs/continuous-simulation.md`](docs/continuous-simulation.md) — Atomic Runner schedule, both loop paths
+- [`docs/ui.md`](docs/ui.md) — replacement web UI tour + dev loop
 
 ## Credits
 
