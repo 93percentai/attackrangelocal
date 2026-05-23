@@ -1,0 +1,39 @@
+# Compose override for the patched Attack Range fork.
+#
+# Used as:
+#   docker compose -f attack_range_fork/upstream/docker/docker-compose.yml \
+#                  -f docker/attack-range.compose.yml \
+#                  up -d
+#
+# This file ONLY adds the local_ludus-specific bits. The base compose still
+# defines the attack_range / api / app services from upstream.
+
+services:
+  attack_range:
+    environment:
+      - PROVIDER=local_ludus
+      - ATTACK_RANGE_TEMPLATE=local_ludus/default.yml
+    # Join the HOST's tailnet so MagicDNS resolution of lab VMs Just Works.
+    # Bridge networking would require the container to run its own tailscaled.
+    network_mode: host
+    volumes:
+      # The patched ansible_manager reads /inventory.yml directly when
+      # provider == local_ludus.
+      - ../ansible/inventory.yml:/inventory.yml:ro
+      # Atomic Red Team atomics for `simulate --random` to pick from.
+      - atomic-red-team:/opt/atomic-red-team
+
+  api:
+    environment:
+      - PROVIDER=local_ludus
+    network_mode: host
+
+  app:
+    environment:
+      # Hide the WireGuard / share-via-config buttons in the Astro UI.
+      - VITE_VPN_DISABLED=true
+      - VITE_PROVIDER=local_ludus
+    network_mode: host
+
+volumes:
+  atomic-red-team:

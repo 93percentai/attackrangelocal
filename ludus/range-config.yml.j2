@@ -1,0 +1,239 @@
+# Ludus range configuration for Splunk Attack Range — local edition.
+#
+# Rendered by scripts/deploy-range.sh using envsubst, sourcing .env.
+# Replace ${RANGE_ID}, ${TS_AUTHKEY}, ${TS_API_KEY}, ${AD_DOMAIN_FQDN},
+# ${AD_DOMAIN_ADMIN}, ${AD_PASSWORD}, ${TS_TAG} at deploy time.
+#
+# Schema reference: https://docs.ludus.cloud/docs/configuration/
+# Tailscale role:   https://github.com/NocteDefensor/ludus_tailscale
+# Splunk roles:     https://github.com/P4T12ICK/ludus_ar_splunk (and _windows / _linux)
+
+network:
+  # Deny-by-default. The Ludus router's FORWARD chain DROPs anything not
+  # matched by a rule below. Lab VMs can NEVER initiate connections to the
+  # public internet outside this allowlist.
+  inter_vlan_default: REJECT
+  external_default: REJECT
+
+  # Block private RFC1918 ranges outright so a misconfigured rule can't let
+  # the range leak onto your home LAN.
+  always_blocked_networks:
+    - 10.0.0.0/8
+    - 192.168.0.0/16
+    - 172.16.0.0/12
+
+  rules:
+    # ----- Bootstrap-only egress -----
+    # These rules are needed during initial provisioning so each VM can
+    # download Splunk binaries, Sysmon, Atomic Red Team, Galaxy roles, etc.
+    # scripts/lock-down.sh REMOVES every rule named "bootstrap-*" after the
+    # range reports SUCCESS and lab software is installed.
+    - name: bootstrap-splunk-https
+      vlan_src: 20
+      ip_last_octet_src: 10
+      vlan_dst: public
+      protocol: tcp
+      ports: 443
+      action: ACCEPT
+    - name: bootstrap-splunk-http
+      vlan_src: 20
+      ip_last_octet_src: 10
+      vlan_dst: public
+      protocol: tcp
+      ports: 80
+      action: ACCEPT
+    - name: bootstrap-win-client1
+      vlan_src: 20
+      ip_last_octet_src: 20
+      vlan_dst: public
+      protocol: tcp
+      ports: 443
+      action: ACCEPT
+    - name: bootstrap-win-srv1
+      vlan_src: 20
+      ip_last_octet_src: 21
+      vlan_dst: public
+      protocol: tcp
+      ports: 443
+      action: ACCEPT
+    - name: bootstrap-dc01
+      vlan_src: 20
+      ip_last_octet_src: 5
+      vlan_dst: public
+      protocol: tcp
+      ports: 443
+      action: ACCEPT
+    - name: bootstrap-linux
+      vlan_src: 20
+      ip_last_octet_src: 30
+      vlan_dst: public
+      protocol: tcp
+      ports: 443
+      action: ACCEPT
+    - name: bootstrap-kali
+      vlan_src: 20
+      ip_last_octet_src: 40
+      vlan_dst: public
+      protocol: tcp
+      ports: 443
+      action: ACCEPT
+    - name: bootstrap-apt-http
+      vlan_src: 20
+      vlan_dst: public
+      protocol: tcp
+      ports: 80
+      action: ACCEPT
+
+    # ----- Permanent egress (NEVER removed by lock-down.sh) -----
+    # Tailscale needs UDP/41641 for direct connections; falls back to DERP
+    # over 443 which is covered by the bootstrap rules until lockdown, then
+    # by an explicit lockdown rule (see scripts/lock-down.sh).
+    - name: tailscale-udp
+      vlan_src: 20
+      vlan_dst: public
+      protocol: udp
+      ports: 41641
+      action: ACCEPT
+    # DNS to the router only (the router resolves upstream; lab VMs cannot
+    # use 8.8.8.8 directly).
+    - name: dns
+      vlan_src: 20
+      vlan_dst: public
+      protocol: udp
+      ports: 53
+      action: ACCEPT
+
+defaults:
+  ad_domain_admin: ${AD_DOMAIN_ADMIN}
+  ad_domain_admin_password: ${AD_PASSWORD}
+  timezone: UTC
+  enable_dynamic_wallpaper: false
+  stale_hours: 0
+
+# YAML anchor for the Tailscale role variables (referenced as <<: *ts on every VM).
+x-tailscale-vars: &ts
+  tailscale_state: present
+  tailscale_authkey: ${TS_AUTHKEY}
+  tailscale_api_key: ${TS_API_KEY}
+  tailscale_ssh: true
+  tailscale_dns: true
+  tailscale_tags:
+    - ${TS_TAG}
+
+ludus:
+  # ---------------------------------------------------------------------------
+  # Active Directory forest root
+  # ---------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-dc01"
+    hostname: "{{ range_id }}-DC01"
+    template: win2022-server-x64-template
+    vlan: 20
+    ip_last_octet: 5
+    ram_gb: 8
+    cpus: 4
+    windows:
+      sysprep: false
+    domain:
+      fqdn: ${AD_DOMAIN_FQDN}
+      role: primary-dc
+    roles:
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts
+      # DC stays AD-DNS authoritative — don't let Tailscale override resolv.
+      tailscale_dns: false
+
+  # ---------------------------------------------------------------------------
+  # Domain member — Windows 11 client (continuous attack target)
+  # ---------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-win-client1"
+    hostname: "{{ range_id }}-WINCLIENT1"
+    template: win11-22h2-x64-enterprise-template
+    vlan: 20
+    ip_last_octet: 20
+    ram_gb: 6
+    cpus: 4
+    windows:
+      sysprep: false
+    domain:
+      fqdn: ${AD_DOMAIN_FQDN}
+      role: member
+    roles:
+      - P4T12ICK.ludus_ar_windows
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts
+      ludus_ar_windows_splunk_ip: "10.${RANGE_ID}.20.10"
+
+  # ---------------------------------------------------------------------------
+  # Domain member — Windows Server 2022 (file/IIS server)
+  # ---------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-win-srv1"
+    hostname: "{{ range_id }}-WINSRV1"
+    template: win2022-server-x64-template
+    vlan: 20
+    ip_last_octet: 21
+    ram_gb: 6
+    cpus: 4
+    windows:
+      sysprep: false
+    domain:
+      fqdn: ${AD_DOMAIN_FQDN}
+      role: member
+    roles:
+      - P4T12ICK.ludus_ar_windows
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts
+      ludus_ar_windows_splunk_ip: "10.${RANGE_ID}.20.10"
+
+  # ---------------------------------------------------------------------------
+  # Splunk Enterprise (the indexer — every other VM forwards to .10)
+  # ---------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-splunk"
+    hostname: "{{ range_id }}-splunk"
+    template: ubuntu-22.04-x64-server-template
+    vlan: 20
+    ip_last_octet: 10
+    ram_gb: 16
+    cpus: 8
+    linux: true
+    roles:
+      - P4T12ICK.ludus_ar_splunk
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts
+
+  # ---------------------------------------------------------------------------
+  # Victim Linux host
+  # ---------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-linux"
+    hostname: "{{ range_id }}-linux"
+    template: ubuntu-22.04-x64-server-template
+    vlan: 20
+    ip_last_octet: 30
+    ram_gb: 4
+    cpus: 2
+    linux: true
+    roles:
+      - P4T12ICK.ludus_ar_linux
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts
+      ludus_ar_linux_splunk_ip: "10.${RANGE_ID}.20.10"
+
+  # ---------------------------------------------------------------------------
+  # Kali (attacker, headless, accessed via Tailscale SSH)
+  # ---------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-kali"
+    hostname: "{{ range_id }}-kali"
+    template: kali-x64-desktop-template
+    vlan: 20
+    ip_last_octet: 40
+    ram_gb: 4
+    cpus: 2
+    linux: true
+    roles:
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts

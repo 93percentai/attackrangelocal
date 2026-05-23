@@ -1,0 +1,36 @@
+# Proxmox VE 8.x auto-installer answer file.
+#
+# Reference: https://pve.proxmox.com/wiki/Automated_Installation
+#
+# Rendered by iso/build-iso.sh from .env. The placeholders below are filled
+# at ISO-build time and baked into the ISO — they are NEVER read at runtime
+# from the network.
+
+[global]
+keyboard      = "en-us"
+country       = "us"
+fqdn          = "ludus-host.range.local"
+mailto        = "root@range.local"
+timezone      = "UTC"
+root_password = "${LUDUS_ADMIN_PASSWORD}"
+# Operator SSH key, baked from .env. Lets you ssh root@<host> immediately
+# after Proxmox finishes installing.
+root_ssh_keys = ["${OPERATOR_SSH_PUBKEY}"]
+
+[network]
+# DHCP on the first detected interface. Override to "from-answer" with
+# explicit static fields if your network requires it.
+source = "from-dhcp"
+
+[disk-setup]
+filesystem  = "ext4"
+# Wipe and use the first disk presented to the installer. CHANGE this if
+# the host has multiple disks and you want a specific target.
+disk_selection.disk_list = ["sda"]
+
+[first-boot]
+# Pull the first-boot script from the ISO itself (not from a URL). The
+# Proxmox auto-installer copies whatever file we point it at into the
+# installed system and registers a systemd unit to execute it once.
+source   = "from-iso"
+ordering = "fully-up"

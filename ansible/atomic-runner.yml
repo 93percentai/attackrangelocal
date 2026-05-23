@@ -1,0 +1,68 @@
+---
+# Installs Red Canary's Atomic Runner as a Windows service on win-client1.
+# Survives reboots, runs forever, uses the curated schedule in
+# ansible/files/atomic-schedule.csv.
+#
+# Documentation:
+#   https://github.com/redcanaryco/invoke-atomicredteam/wiki/Continuous-Atomic-Testing
+#
+# After this plays, control the runner from the Windows host:
+#   - Stop:    create file  C:\AtomicRunner\stop
+#   - Status:  Get-Service atomicrunnerservice
+#   - Logs:    C:\AtomicRunner\Logs\
+#
+# Re-running this play is safe (idempotent).
+
+- name: Install Atomic Runner for continuous fire-and-forget simulation
+  hosts: "{{ range_id | default(lookup('env','RANGE_ID')) }}-winclient1"
+  gather_facts: false
+
+  vars:
+    atomics_dir: 'C:\AtomicRedTeam'
+    runner_dir:  'C:\AtomicRunner'
+    schedule_csv_src: "{{ playbook_dir }}/files/atomic-schedule.csv"
+
+  tasks:
+    - name: Ensure atomics + runner directories exist
+      ansible.windows.win_file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ atomics_dir }}"
+        - "{{ runner_dir }}"
+        - "{{ runner_dir }}\\Logs"
+
+    - name: Install invoke-atomicredteam + atomics (one-shot; needs egress)
+      ansible.windows.win_powershell:
+        script: |
+          if (-not (Get-Module -ListAvailable -Name invoke-atomicredteam)) {
+            IEX (IWR 'https://raw.githubusercontent.com/redcanaryco/invoke-atomicredteam/master/install-atomicredteam.ps1' -UseBasicParsing)
+            Install-AtomicRedTeam -getAtomics -Force -InstallPath "{{ atomics_dir }}"
+          }
+
+    - name: Copy curated atomic schedule
+      ansible.windows.win_copy:
+        src: "{{ schedule_csv_src }}"
+        dest: "{{ runner_dir }}\\schedule.csv"
+
+    - name: Register Atomic Runner Windows service
+      ansible.windows.win_powershell:
+        script: |
+          Import-Module invoke-atomicredteam -Force
+          # scheduleTimeSpan is total time for one full rotation through all
+          # enabled atomics. 6h means a moderate cadence even with ~30 techs.
+          Install-AtomicRunner -atomicsFolder "{{ atomics_dir }}\atomics" `
+                               -artifactsPath "{{ runner_dir }}\artifacts" `
+                               -scheduleFile  "{{ runner_dir }}\schedule.csv" `
+                               -scheduleTimeSpan (New-TimeSpan -Hours 6) `
+                               -InstallAsService
+
+    - name: Ensure atomicrunnerservice is running and starts on boot
+      ansible.windows.win_service:
+        name: atomicrunnerservice
+        start_mode: auto
+        state: started
+
+    - name: Show service status
+      ansible.windows.win_powershell:
+        script: 'Get-Service atomicrunnerservice | Format-List Name,Status,StartType'

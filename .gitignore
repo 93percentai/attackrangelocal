@@ -1,0 +1,33 @@
+# Secrets — NEVER commit
+.env
+ludus/.env
+iso/payload/secrets.env
+**/secrets.env
+*.pem
+*.key
+ssh-keys/
+
+# Built ISO + downloaded upstream ISO cache
+iso/build/
+iso/cache/
+*.iso
+
+# Rendered config files
+ludus/range-config.yml
+ansible/inventory.yml
+
+# Attack Range fork (cloned by bootstrap.sh, not tracked in this repo)
+attack_range_fork/upstream/
+
+# Logs / status
+*.log
+status
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
