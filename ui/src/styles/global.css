@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { color-scheme: dark; }
+  body {
+    @apply bg-black text-ink antialiased font-sans;
+    background-image:
+      radial-gradient(circle at 50% -200px, rgba(103,232,249,0.08), transparent 60%),
+      linear-gradient(to bottom, #0a0a0a, #000);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+  ::selection { @apply bg-accent text-black; }
+  a { @apply text-accent hover:underline underline-offset-2; }
+  h1, h2, h3, h4 { @apply font-semibold tracking-tight; }
+  code, pre, .mono { @apply font-mono; }
+  hr { @apply border-line; }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-line bg-panel/80 backdrop-blur-sm;
+  }
+  .card-pad { @apply p-5; }
+  .btn {
+    @apply inline-flex items-center gap-2 rounded-md border border-line bg-panel2
+           px-3 py-1.5 text-sm font-medium text-ink hover:border-accent hover:text-accent
+           disabled:opacity-40 disabled:cursor-not-allowed transition-colors;
+  }
+  .btn-danger { @apply hover:border-danger hover:text-danger; }
+  .btn-primary {
+    @apply border-accent text-accent hover:bg-accent hover:text-black;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-md border border-line
+           bg-panel2 px-2 py-0.5 text-xs font-mono uppercase tracking-wider;
+  }
+  .dot { @apply inline-block h-2 w-2 rounded-full; }
+  .kbd {
+    @apply rounded border border-line bg-panel2 px-1.5 py-0.5 text-xs font-mono;
+  }
+  .h-label {
+    @apply text-xs font-mono uppercase tracking-[0.2em] text-muted;
+  }
+}

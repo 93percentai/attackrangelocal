@@ -1,0 +1,50 @@
+---
+import { getBootstrapPhase } from "@/lib/ludus";
+
+const phase = await getBootstrapPhase();
+const phaseTone = phase.startsWith("range-up") || phase === "lockdown-applied"
+  ? "ok"
+  : phase === "unknown"
+    ? "muted"
+    : "warn";
+
+const links = [
+  { href: "/",           label: "Range" },
+  { href: "/simulate",   label: "Simulate" },
+  { href: "/continuous", label: "Continuous" },
+  { href: "/extended",   label: "Extended" },
+  { href: "/network",    label: "Network" },
+  { href: "/forest",     label: "Forest" },
+];
+
+const path = Astro.url.pathname.replace(/\/$/, "") || "/";
+---
+
+<header class="border-b border-line bg-black/60 backdrop-blur-sm sticky top-0 z-10">
+  <div class="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
+    <a href="/" class="flex items-center gap-3 no-underline">
+      <svg width="22" height="22" viewBox="0 0 32 32">
+        <path d="M16 5 L27 26 L5 26 Z" fill="none" stroke="#67e8f9" stroke-width="2.5" stroke-linejoin="round"/>
+        <circle cx="16" cy="20" r="2.2" fill="#67e8f9"/>
+      </svg>
+      <div class="leading-tight">
+        <div class="text-sm font-semibold text-ink">attackrangelocal</div>
+        <div class="text-[10px] uppercase tracking-[0.25em] text-muted">splunk · ludus · tailscale</div>
+      </div>
+    </a>
+
+    <nav class="flex items-center gap-1 text-sm">
+      {links.map(l => (
+        <a href={l.href}
+           class={`rounded px-3 py-1.5 no-underline hover:bg-panel2 ${path === l.href ? "text-accent" : "text-ink"}`}>
+          {l.label}
+        </a>
+      ))}
+    </nav>
+
+    <div class="badge">
+      <span class={`dot ${phaseTone === "ok" ? "bg-ok" : phaseTone === "warn" ? "bg-warn" : "bg-muted"}`}></span>
+      <span class="text-[10px]">{phase}</span>
+    </div>
+  </div>
+</header>

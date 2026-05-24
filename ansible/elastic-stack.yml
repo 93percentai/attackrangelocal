@@ -1,0 +1,240 @@
+---
+# Brings up a single-node Elastic stack on the `elastic` VM:
+#   - Elasticsearch  (port 9200)  - storage + search
+#   - Kibana         (port 5601)  - web UI + Fleet UI
+#   - Fleet Server   (port 8220)  - enrollment endpoint for Elastic Agents
+#
+# Resource-constrained: ES heap pinned at 1 GB, Kibana 512 MB. Fits the
+# 4 GB / 2 vCPU VM with ~500 MB headroom for the OS.
+#
+# Security is ENABLED (xpack.security) with the default `elastic` user;
+# Fleet enrolment tokens are generated post-boot and dropped into a
+# shared file the agent playbooks read.
+#
+# Runs DURING the bootstrap egress window so Docker can pull images.
+# After lock-down.sh the images are on disk and the stack keeps running.
+
+- name: Bring up the Elastic stack on the elastic VM
+  hosts: "{{ range_id | default(lookup('env','RANGE_ID')) }}-elastic"
+  become: true
+  gather_facts: true
+
+  vars:
+    elastic_version: "{{ lookup('env','ELASTIC_VERSION') | default('8.15.0', true) }}"
+    elastic_password: "{{ lookup('env','ELASTIC_PASSWORD') }}"
+    kibana_enc_key:   "{{ lookup('env','KIBANA_ENCRYPTION_KEY') }}"
+    fleet_server_host: "{{ ansible_default_ipv4.address }}"
+    stack_dir: /opt/elastic-stack
+
+  tasks:
+    - name: Install Docker engine + compose plugin
+      ansible.builtin.apt:
+        name: [docker.io, docker-compose-v2, curl]
+        state: present
+        update_cache: yes
+
+    - name: Enable + start docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Required vm.max_map_count for Elasticsearch
+      ansible.posix.sysctl:
+        name: vm.max_map_count
+        value: '262144'
+        state: present
+        reload: yes
+
+    - name: Stack working directory
+      ansible.builtin.file:
+        path: "{{ stack_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Drop docker-compose.yml
+      ansible.builtin.copy:
+        dest: "{{ stack_dir }}/docker-compose.yml"
+        mode: '0644'
+        content: |
+          name: elastic-stack
+          services:
+
+            elasticsearch:
+              image: docker.elastic.co/elasticsearch/elasticsearch:{{ elastic_version }}
+              container_name: elasticsearch
+              environment:
+                - discovery.type=single-node
+                - cluster.name=attackrangelocal
+                - bootstrap.memory_lock=true
+                - xpack.security.enabled=true
+                - xpack.security.http.ssl.enabled=false   # lab, internal VLAN only
+                - xpack.security.transport.ssl.enabled=false
+                - ELASTIC_PASSWORD={{ elastic_password }}
+                - ES_JAVA_OPTS=-Xms1g -Xmx1g
+              ulimits:
+                memlock: { soft: -1, hard: -1 }
+              ports: ["9200:9200"]
+              volumes: ["esdata:/usr/share/elasticsearch/data"]
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD-SHELL", "curl -fs -u elastic:{{ elastic_password }} http://localhost:9200 || exit 1"]
+                interval: 15s
+                timeout: 5s
+                retries: 20
+
+            kibana:
+              image: docker.elastic.co/kibana/kibana:{{ elastic_version }}
+              container_name: kibana
+              depends_on: { elasticsearch: { condition: service_healthy } }
+              environment:
+                - SERVER_NAME=kibana
+                - SERVER_HOST=0.0.0.0
+                - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+                - ELASTICSEARCH_USERNAME=kibana_system
+                - ELASTICSEARCH_PASSWORD={{ elastic_password }}
+                - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY={{ kibana_enc_key }}
+                - XPACK_REPORTING_ENCRYPTIONKEY={{ kibana_enc_key }}
+                - XPACK_SECURITY_ENCRYPTIONKEY={{ kibana_enc_key }}
+                - NODE_OPTIONS=--max-old-space-size=512
+                - XPACK_FLEET_AGENTS_FLEET_SERVER_HOSTS=["http://{{ fleet_server_host }}:8220"]
+              ports: ["5601:5601"]
+              restart: unless-stopped
+
+            fleet-server:
+              image: docker.elastic.co/elastic-agent/elastic-agent:{{ elastic_version }}
+              container_name: fleet-server
+              depends_on: { kibana: { condition: service_started } }
+              environment:
+                - FLEET_SERVER_ENABLE=true
+                - FLEET_SERVER_ELASTICSEARCH_HOST=http://elasticsearch:9200
+                - FLEET_SERVER_SERVICE_TOKEN_PATH=/tokens/service.token
+                - FLEET_SERVER_POLICY_ID=fleet-server-policy
+                - FLEET_SERVER_INSECURE_HTTP=true
+                - FLEET_URL=http://{{ fleet_server_host }}:8220
+                - KIBANA_FLEET_SETUP=true
+                - KIBANA_FLEET_HOST=http://kibana:5601
+                - KIBANA_FLEET_USERNAME=elastic
+                - KIBANA_FLEET_PASSWORD={{ elastic_password }}
+              ports: ["8220:8220"]
+              volumes: ["tokens:/tokens"]
+              restart: unless-stopped
+
+          volumes:
+            esdata:
+            tokens:
+
+    - name: docker compose up -d
+      community.docker.docker_compose_v2:
+        project_src: "{{ stack_dir }}"
+        state: present
+
+    - name: Wait for Elasticsearch HTTP to respond at all
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9200/"
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        status_code: 200
+      register: es_up
+      retries: 30
+      delay: 10
+      until: es_up.status == 200
+
+    - name: Relax disk allocation watermark for small lab disks
+      # The 4 GB elastic VM has limited disk; ES's 85/90/95% watermarks
+      # otherwise block .security-7 from being allocated on first boot,
+      # which then prevents the kibana_system password reset below.
+      # Verified against a live single-node ES 8.15 deployment.
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9200/_cluster/settings"
+        method: PUT
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        body_format: json
+        body:
+          persistent:
+            cluster.routing.allocation.disk.threshold_enabled: false
+        status_code: 200
+
+    - name: Wait for Elasticsearch cluster to be GREEN
+      # Required before resetting kibana_system — the password reset writes
+      # to .security-7, which won't accept writes while the shard is red.
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9200/_cluster/health?wait_for_status=green&timeout=60s"
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        status_code: 200
+      register: es_health
+      retries: 20
+      delay: 10
+      until:
+        - es_health.status == 200
+        - (es_health.json.status | default('?')) == 'green'
+
+    - name: Reset the `kibana_system` user password (idempotent)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9200/_security/user/kibana_system/_password"
+        method: POST
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        body_format: json
+        body: { password: "{{ elastic_password }}" }
+        status_code: [200, 201]
+      register: kibana_pw_reset
+      retries: 10
+      delay: 5
+      until: kibana_pw_reset.status in [200, 201]
+
+    - name: Restart Kibana so it picks up the new kibana_system password
+      # On first deploy, Kibana boots before we've reset kibana_system, so
+      # its initial auth attempts fail (security_exception in the log).
+      # A restart after the password change clears that.
+      community.docker.docker_container:
+        name: kibana
+        state: started
+        restart: true
+
+    - name: Wait for Kibana to be ready
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5601/api/status"
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        status_code: 200
+      register: kibana_status
+      retries: 36
+      delay: 10
+      until: kibana_status.status == 200
+
+    - name: Create an enrollment token for Elastic Agents
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5601/api/fleet/enrollment_api_keys"
+        method: POST
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        headers: { kbn-xsrf: "true" }
+        body_format: json
+        body: { name: "attackrangelocal-default", policy_id: "fleet-server-policy" }
+        status_code: [200, 201, 409]
+      register: enroll_resp
+      failed_when: false
+
+    - name: Save Fleet enrollment token to a shared location
+      ansible.builtin.copy:
+        dest: /opt/elastic-stack/fleet-enrollment.token
+        mode: '0600'
+        content: "{{ enroll_resp.json.item.api_key | default('NEEDS_MANUAL_RETRIEVAL') }}"
+
+    - name: Show access info
+      ansible.builtin.debug:
+        msg: |
+          Elastic stack up.
+            Kibana:  http://{{ inventory_hostname }}:5601   (elastic / {{ elastic_password }})
+            ES API:  http://{{ inventory_hostname }}:9200
+            Fleet:   http://{{ inventory_hostname }}:8220
+          Enrollment token written to /opt/elastic-stack/fleet-enrollment.token

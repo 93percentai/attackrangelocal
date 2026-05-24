@@ -1,0 +1,30 @@
+"Activate","Name","auto_generated_guid","Technique","Path","Description"
+"True","Command and Scripting Interpreter: PowerShell - Run Base64 EncodedCommand","6c1d2a4d-3f93-4e0e-a347-49b54c1a39d2","T1059.001","T1059.001","Encoded PowerShell exec — benign whoami"
+"True","System Information Discovery","b3aa9d2a-72e1-4f6f-9c4a-9d4a4c7a5b1d","T1082","T1082","Run systeminfo, whoami, hostname"
+"True","Process Discovery","d96d6c20-78f1-4b54-b2c5-83f4b6e1aa9d","T1057","T1057","tasklist + Get-Process"
+"True","Account Discovery: Local Account","2bcbbc1c-7e62-4b48-8c14-2d4a9c0aaa11","T1087.001","T1087.001","net user, Get-LocalUser"
+"True","Account Discovery: Domain Account","6c1f2c7e-9e2a-4a8a-9a9a-bd3a8a5d9b1a","T1087.002","T1087.002","net user /domain (read-only)"
+"True","Network Service Discovery (nslookup)","8e7ba8b6-0c1d-4a4d-b6b6-2cc3d9b3f021","T1046","T1046","nslookup of internal hostnames"
+"True","Permission Groups Discovery: Local","aaab1234-12ab-43cd-aaaa-aabbccddeeff","T1069.001","T1069.001","net localgroup administrators"
+"True","Permission Groups Discovery: Domain","bbcc5678-12ab-43cd-bbbb-aabbccddeeff","T1069.002","T1069.002","net group /domain (read-only)"
+"True","Boot or Logon Autostart Execution: Registry Run Keys","f1e2d3c4-b5a6-7890-1234-567890abcdef","T1547.001","T1547.001","Add a benign Run key (cleaned on next iter)"
+"True","Indicator Removal: Clear Windows Event Logs (audit-only)","cd34ab12-12ab-43cd-cccc-aabbccddeeff","T1070.001","T1070.001","wevtutil cl audit-only application"
+"True","Scheduled Task/Job: At","11223344-aabb-ccdd-eeff-001122334455","T1053.002","T1053.002","schtasks /create simple test task"
+"True","System Owner/User Discovery","22334455-bbcc-ddee-ff00-112233445566","T1033","T1033","whoami /all"
+"True","Software Discovery","33445566-ccdd-eeff-0011-223344556677","T1518","T1518","Get-ItemProperty installed software"
+"True","System Network Configuration Discovery","44556677-ddee-ff00-1122-334455667788","T1016","T1016","ipconfig /all, route print"
+"True","File and Directory Discovery","55667788-eeff-0011-2233-445566778899","T1083","T1083","dir recursive scan of C:\Users"
+"True","Credentials in Files (search)","66778899-ff00-1122-3344-5566778899aa","T1552.001","T1552.001","findstr password in temp files"
+"True","Indicator Removal: Timestomp","778899aa-0011-2233-4455-6677889aabbb","T1070.006","T1070.006","Modify timestamps on benign test file"
+"True","Masquerading: Match Legitimate Name","8899aabb-1122-3344-5566-778899aabbcc","T1036.005","T1036.005","Copy notepad.exe to svchost-test.exe"
+"True","System Service Discovery","99aabbcc-2233-4455-6677-8899aabbccdd","T1007","T1007","sc query, Get-Service"
+"True","Query Registry","aabbccdd-3344-5566-7788-99aabbccddee","T1012","T1012","reg query HKLM\Software"
+"True","Network Share Discovery","bbccddee-4455-6677-8899-aabbccddeeff","T1135","T1135","net view, net share"
+"True","Domain Trust Discovery","ccddeeff-5566-7788-99aa-bbccddeeff00","T1482","T1482","nltest /trusted_domains"
+"True","Remote System Discovery","ddeeff00-6677-8899-aabb-ccddeeff0011","T1018","T1018","arp -a, net view /domain"
+"True","Process Injection (test only — no real injection)","eeff0011-7788-99aa-bbcc-ddeeff001122","T1055","T1055","Atomic harmless demo binary"
+# NOT included intentionally (destructive / disruptive):
+#   T1485 Data Destruction, T1486 Data Encrypted for Impact (ransomware),
+#   T1490 Inhibit System Recovery, T1491 Defacement,
+#   T1561 Disk Wipe, T1565 Data Manipulation, T1529 System Shutdown/Reboot,
+#   T1003.001 LSASS dump (run on-demand only — extremely noisy/destructive in loops)

@@ -1,0 +1,73 @@
+# Compose override for the patched Attack Range fork + the replacement UI.
+#
+# Used as:
+#   docker compose -f attack_range_fork/upstream/docker/docker-compose.yml \
+#                  -f docker/attack-range.compose.yml \
+#                  up -d
+#
+# What this file does:
+#   1. Configures the upstream attack_range + api services for local_ludus
+#      (host networking, static inventory mount).
+#   2. DISABLES upstream's Astro `app` service (port 4321) — it's full of
+#      cloud-provider + WireGuard buttons that don't apply here. We swap
+#      in our own UI built specifically for this deployment.
+#   3. Adds the `ui` service built from ../ui/Dockerfile. Same port (4321)
+#      so your bookmarks still work.
+
+services:
+  attack_range:
+    environment:
+      - PROVIDER=local_ludus
+      - ATTACK_RANGE_TEMPLATE=local_ludus/default.yml
+    # Join the HOST's tailnet so MagicDNS resolution of lab VMs Just Works.
+    network_mode: host
+    volumes:
+      # The patched ansible_manager reads /inventory.yml directly when
+      # provider == local_ludus.
+      - ../ansible/inventory.yml:/inventory.yml:ro
+      # Atomic Red Team atomics for `simulate --random` to pick from.
+      - atomic-red-team:/opt/atomic-red-team
+
+  api:
+    environment:
+      - PROVIDER=local_ludus
+    network_mode: host
+
+  # Upstream Astro UI: do not start. Its assumptions (cloud providers,
+  # WireGuard client sharing, build/destroy buttons) don't fit local_ludus.
+  app:
+    profiles: ["disabled-upstream-ui"]
+
+  # Replacement UI shipped from ui/.
+  ui:
+    build:
+      context: ../ui
+      dockerfile: Dockerfile
+    image: attackrangelocal-ui:latest
+    container_name: attackrangelocal-ui
+    network_mode: host
+    environment:
+      - HOST=0.0.0.0
+      - PORT=4321
+      # Reads from .env on the host. Add the variables you want exposed.
+      - RANGE_ID=${RANGE_ID:-42}
+      - AD_DOMAIN_FQDN=${AD_DOMAIN_FQDN:-range.local}
+      - AD_DOMAIN_ADMIN=${AD_DOMAIN_ADMIN:-rangeadmin}
+      - AD_PASSWORD=${AD_PASSWORD:-}
+      - ATTACK_RANGE_API=http://127.0.0.1:4000
+      - STATUS_FILE=/var/lib/ludus-bootstrap/status
+    volumes:
+      # Read bootstrap phase from the Ludus host.
+      - /var/lib/ludus-bootstrap:/var/lib/ludus-bootstrap:ro
+      # Allow the UI to shell out to ludus / tailscale on the host. Mount the
+      # CLIs in read-only and share the operator's ssh key for verify-isolation.
+      - /usr/local/bin/ludus:/usr/local/bin/ludus:ro
+      - /usr/bin/tailscale:/usr/bin/tailscale:ro
+      - /opt/attackrangelocal:/opt/attackrangelocal:ro
+      - /root/.ssh:/root/.ssh:ro
+    restart: unless-stopped
+    depends_on:
+      - api
+
+volumes:
+  atomic-red-team:

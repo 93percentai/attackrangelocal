@@ -1,0 +1,10 @@
+# Ansible Galaxy roles installed into the Ludus admin user.
+# scripts/install-roles.sh iterates this file. Comments and blank lines ignored.
+
+# Per-VM Splunk Attack Range provisioning (Splunk Enterprise + UF/Sysmon/CIM/ESCU)
+P4T12ICK.ludus_ar_splunk
+P4T12ICK.ludus_ar_windows
+P4T12ICK.ludus_ar_linux
+
+# Tailscale onboarding for every VM
+NocteDefensor.ludus_tailscale

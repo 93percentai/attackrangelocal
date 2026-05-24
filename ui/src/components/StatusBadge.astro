@@ -1,0 +1,16 @@
+---
+type Tone = "ok" | "warn" | "danger" | "muted" | "info";
+interface Props { tone: Tone; label: string }
+const { tone, label } = Astro.props as Props;
+const dotClass = {
+  ok:     "bg-ok",
+  warn:   "bg-warn",
+  danger: "bg-danger",
+  muted:  "bg-muted",
+  info:   "bg-accent",
+}[tone];
+---
+<span class="badge">
+  <span class:list={["dot", dotClass]}></span>
+  <span>{label}</span>
+</span>

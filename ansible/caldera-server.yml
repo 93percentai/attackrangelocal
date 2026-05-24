@@ -1,0 +1,86 @@
+---
+# Installs MITRE CALDERA server on the kali VM. CALDERA is a real C2
+# framework used by red teams; it gives us a control plane for the
+# Sandcat agent dropped on win-client1 by extended-attacks.yml.
+#
+# Lab-only — CALDERA's HTTP server binds 0.0.0.0 but the Ludus router
+# only allows VLAN-internal access (deny-all egress from the lab).
+
+- name: Install MITRE CALDERA server on kali
+  hosts: "{{ range_id | default(lookup('env','RANGE_ID')) }}-kali"
+  become: true
+  gather_facts: false
+
+  vars:
+    caldera_dir: /opt/caldera
+    caldera_port: 8888
+    caldera_pw:   "{{ lookup('env','CALDERA_PASSWORD') | default('changeme', true) }}"
+
+  tasks:
+    - name: Apt install build deps
+      ansible.builtin.apt:
+        name: [git, python3, python3-pip, python3-venv, golang, npm]
+        state: present
+        update_cache: yes
+
+    - name: Clone CALDERA
+      ansible.builtin.git:
+        repo: https://github.com/mitre/caldera.git
+        dest: "{{ caldera_dir }}"
+        version: master
+        recursive: yes
+        depth: 1
+
+    - name: Create venv and install requirements
+      ansible.builtin.shell: |
+        cd {{ caldera_dir }}
+        python3 -m venv venv
+        ./venv/bin/pip install -r requirements.txt
+      args: { creates: "{{ caldera_dir }}/venv/bin/python3" }
+
+    - name: Override default admin/red passwords
+      ansible.builtin.copy:
+        dest: "{{ caldera_dir }}/conf/local.yml"
+        content: |
+          users:
+            red:
+              admin: "{{ caldera_pw }}"
+              red:   "{{ caldera_pw }}"
+            blue:
+              blue: "{{ caldera_pw }}"
+          host: 0.0.0.0
+          port: {{ caldera_port }}
+          plugins:
+            - sandcat
+            - stockpile
+            - atomic
+            - response
+            - training
+
+    - name: Systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/caldera.service
+        content: |
+          [Unit]
+          Description=MITRE CALDERA
+          After=network-online.target
+          [Service]
+          WorkingDirectory={{ caldera_dir }}
+          ExecStart={{ caldera_dir }}/venv/bin/python server.py --build --insecure
+          Restart=on-failure
+          User=root
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable + start
+      ansible.builtin.systemd:
+        name: caldera
+        daemon_reload: yes
+        enabled: yes
+        state: started
+
+    - name: Show URL
+      ansible.builtin.debug:
+        msg: |
+          CALDERA up at http://{{ inventory_hostname }}:{{ caldera_port }}
+          login: red / {{ caldera_pw }}
