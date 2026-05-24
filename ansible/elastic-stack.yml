@@ -129,9 +129,40 @@
         project_src: "{{ stack_dir }}"
         state: present
 
-    - name: Wait for Elasticsearch to be green/yellow
+    - name: Wait for Elasticsearch HTTP to respond at all
       ansible.builtin.uri:
-        url: "http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=60s"
+        url: "http://127.0.0.1:9200/"
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        status_code: 200
+      register: es_up
+      retries: 30
+      delay: 10
+      until: es_up.status == 200
+
+    - name: Relax disk allocation watermark for small lab disks
+      # The 4 GB elastic VM has limited disk; ES's 85/90/95% watermarks
+      # otherwise block .security-7 from being allocated on first boot,
+      # which then prevents the kibana_system password reset below.
+      # Verified against a live single-node ES 8.15 deployment.
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9200/_cluster/settings"
+        method: PUT
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        body_format: json
+        body:
+          persistent:
+            cluster.routing.allocation.disk.threshold_enabled: false
+        status_code: 200
+
+    - name: Wait for Elasticsearch cluster to be GREEN
+      # Required before resetting kibana_system — the password reset writes
+      # to .security-7, which won't accept writes while the shard is red.
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:9200/_cluster/health?wait_for_status=green&timeout=60s"
         user: elastic
         password: "{{ elastic_password }}"
         force_basic_auth: yes
@@ -139,19 +170,9 @@
       register: es_health
       retries: 20
       delay: 10
-      until: es_health.status == 200
-
-    - name: Wait for Kibana to be ready
-      ansible.builtin.uri:
-        url: "http://127.0.0.1:5601/api/status"
-        user: elastic
-        password: "{{ elastic_password }}"
-        force_basic_auth: yes
-        status_code: 200
-      register: kibana_status
-      retries: 30
-      delay: 10
-      until: kibana_status.status == 200
+      until:
+        - es_health.status == 200
+        - (es_health.json.status | default('?')) == 'green'
 
     - name: Reset the `kibana_system` user password (idempotent)
       ansible.builtin.uri:
@@ -163,6 +184,31 @@
         body_format: json
         body: { password: "{{ elastic_password }}" }
         status_code: [200, 201]
+      register: kibana_pw_reset
+      retries: 10
+      delay: 5
+      until: kibana_pw_reset.status in [200, 201]
+
+    - name: Restart Kibana so it picks up the new kibana_system password
+      # On first deploy, Kibana boots before we've reset kibana_system, so
+      # its initial auth attempts fail (security_exception in the log).
+      # A restart after the password change clears that.
+      community.docker.docker_container:
+        name: kibana
+        state: started
+        restart: true
+
+    - name: Wait for Kibana to be ready
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5601/api/status"
+        user: elastic
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        status_code: 200
+      register: kibana_status
+      retries: 36
+      delay: 10
+      until: kibana_status.status == 200
 
     - name: Create an enrollment token for Elastic Agents
       ansible.builtin.uri:
