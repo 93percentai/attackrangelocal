@@ -20,6 +20,9 @@ set -a; source "${REPO_ROOT}/.env"; set +a
 
 envsubst < "${REPO_ROOT}/ansible/inventory.yml.j2" > "${REPO_ROOT}/ansible/inventory.yml"
 
+echo "=== 0/3  Ensure ansible collections are installed ==="
+ansible-galaxy collection install -r "${REPO_ROOT}/ansible/requirements.yml" 1>&2
+
 echo "=== 1/3  Elastic stack on ${RANGE_ID}-elastic ==="
 ansible-playbook \
   -i "${REPO_ROOT}/ansible/inventory.yml" \

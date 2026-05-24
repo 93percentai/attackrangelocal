@@ -28,6 +28,9 @@ if [[ "${SKIP_MALWARE_SAMPLES:-0}" == "0" && -z "${MALWARE_BAZAAR_API_KEY:-}" ]]
   export SKIP_MALWARE_SAMPLES=1
 fi
 
+echo "=== 0/3  Ensure ansible collections are installed ==="
+ansible-galaxy collection install -r "${REPO_ROOT}/ansible/requirements.yml" 1>&2
+
 echo "=== 1/3  Extended attack tooling on win-client1 ==="
 ansible-playbook \
   -i "${REPO_ROOT}/ansible/inventory.yml" \

@@ -79,44 +79,48 @@ def main() -> int:
 
     # ---- Patch 1: register local_ludus as a valid CLI provider ----
     # Most v5 builds use argparse with choices=["aws","azure","gcp"]. We
-    # rewrite that list to include local_ludus.
+    # rewrite that list to include local_ludus. Marker is the string
+    # "local_ludus" itself; if it's already present we skip.
     if cli.exists():
         regex_patch(
             cli,
             r'choices\s*=\s*\["aws",\s*"azure",\s*"gcp"\]',
-            'choices=["aws", "azure", "gcp", "local_ludus"]  # PATCH:local_ludus',
-            "PATCH:local_ludus",
+            'choices=["aws", "azure", "gcp", "local_ludus"]',
+            '"local_ludus"',
         )
 
     # ---- Patch 1b: wire the controller's provider dispatcher ----
-    # Add a branch that instantiates LocalLudusProvider.
+    # Add a branch that instantiates LocalLudusProvider. We capture the
+    # leading whitespace of the gcp elif so the new elif matches the
+    # surrounding indentation level (varies by Attack Range version).
     if controller.exists():
-        patch(
+        regex_patch(
             controller,
-            'elif self.config["general"]["provider"] == "gcp":',
-            (
-                '\n            elif self.config["general"]["provider"] == "local_ludus":'
-                '\n                # PATCH:local_ludus -- substrate is Ludus + Tailscale.'
-                '\n                from attack_range.cloud_providers.local_ludus_provider import LocalLudusProvider'
-                '\n                self.provider = LocalLudusProvider(self.config, self.log)'
-            ),
+            r'^(?P<indent>[ \t]*)elif self\.config\["general"\]\["provider"\] == "gcp":[^\n]*\n'
+            r'(?P<body>(?:\1[ \t]+[^\n]*\n)+)',
+            r'\g<0>'
+            r'\g<indent>elif self.config["general"]["provider"] == "local_ludus":'
+            r'  # PATCH:local_ludus-controller\n'
+            r'\g<indent>    from attack_range.cloud_providers.local_ludus_provider import LocalLudusProvider\n'
+            r'\g<indent>    self.provider = LocalLudusProvider(self.config, self.log)\n',
             "PATCH:local_ludus-controller",
         )
 
         # ---- Patch 2 + 2b: stub VPN phases when provider is local_ludus ----
         regex_patch(
             controller,
-            r'(def\s+build_vpn_phase\s*\(self[^)]*\):\s*\n)',
-            r'\1        if self.config["general"]["provider"] == "local_ludus":\n'
-            r'            self.log.info("local_ludus: skipping WireGuard build phase")\n'
-            r'            return  # PATCH:local_ludus-vpn\n',
-            "PATCH:local_ludus-vpn",
+            r'(?P<sig>^(?P<indent>[ \t]*)def\s+build_vpn_phase\s*\(self[^)]*\):\s*\n)',
+            r'\g<sig>'
+            r'\g<indent>    if self.config["general"]["provider"] == "local_ludus":\n'
+            r'\g<indent>        return  # PATCH:local_ludus-vpn-build\n',
+            "PATCH:local_ludus-vpn-build",
         )
         regex_patch(
             controller,
-            r'(def\s+prompt_vpn_connection\s*\(self[^)]*\):\s*\n)',
-            r'\1        if self.config["general"]["provider"] == "local_ludus":\n'
-            r'            return  # PATCH:local_ludus-vpn-prompt\n',
+            r'(?P<sig>^(?P<indent>[ \t]*)def\s+prompt_vpn_connection\s*\(self[^)]*\):\s*\n)',
+            r'\g<sig>'
+            r'\g<indent>    if self.config["general"]["provider"] == "local_ludus":\n'
+            r'\g<indent>        return  # PATCH:local_ludus-vpn-prompt\n',
             "PATCH:local_ludus-vpn-prompt",
         )
 
@@ -128,26 +132,29 @@ def main() -> int:
             "_patch_wireguard_allowed_ips",
             "_patch_wireguard_server_config",
         ):
+            marker = f"PATCH:local_ludus-wg-gate-{fn}"
             regex_patch(
                 ansible_mgr,
-                rf'(def\s+{fn}\s*\(self[^)]*\):\s*\n)',
-                r'\1        if getattr(self, "provider", None) == "local_ludus":\n'
-                r'            return  # PATCH:local_ludus-wg-gate\n',
-                f"PATCH:local_ludus-wg-gate-{fn}",
+                rf'(?P<sig>^(?P<indent>[ \t]*)def\s+{fn}\s*\(self[^)]*\):\s*\n)',
+                r'\g<sig>'
+                r'\g<indent>    if getattr(self, "provider", None) == "local_ludus":\n'
+                rf'\g<indent>        return  # {marker}\n',
+                marker,
             )
 
         # ---- Patch 3: static inventory injection ----
         regex_patch(
             ansible_mgr,
-            r'(def\s+update_inventory_attack_range_servers\s*\(self[^)]*\):\s*\n)',
-            r'\1        if getattr(self, "provider", None) == "local_ludus":\n'
-            r'            # PATCH:local_ludus-static-inventory\n'
-            r'            import shutil, os\n'
-            r'            src = "/inventory.yml"\n'
-            r'            if os.path.exists(src):\n'
-            r'                shutil.copy(src, self.inventory_path)\n'
-            r'                self.log.info(f"local_ludus: copied static inventory from {src}")\n'
-            r'                return\n',
+            r'(?P<sig>^(?P<indent>[ \t]*)def\s+update_inventory_attack_range_servers\s*\(self[^)]*\):\s*\n)',
+            r'\g<sig>'
+            r'\g<indent>    # PATCH:local_ludus-static-inventory\n'
+            r'\g<indent>    if getattr(self, "provider", None) == "local_ludus":\n'
+            r'\g<indent>        import shutil, os\n'
+            r'\g<indent>        src = "/inventory.yml"\n'
+            r'\g<indent>        if os.path.exists(src):\n'
+            r'\g<indent>            shutil.copy(src, self.inventory_path)\n'
+            r'\g<indent>            self.log.info(f"local_ludus: copied static inventory from {src}")\n'
+            r'\g<indent>            return\n',
             "PATCH:local_ludus-static-inventory",
         )
 
@@ -160,13 +167,13 @@ def main() -> int:
             r'(simulate_parser\.add_argument\(\s*"-te",\s*"--techniques".*?\)\s*\n)',
             r'\1'
             r'    simulate_parser.add_argument("--loop", action="store_true",\n'
-            r'        help="PATCH:local_ludus run techniques in an infinite loop")\n'
+            r'        help="[PATCH:local_ludus-simulate-flags] run in infinite loop")\n'
             r'    simulate_parser.add_argument("--random", action="store_true",\n'
-            r'        help="PATCH:local_ludus pick random techniques each iteration")\n'
+            r'        help="pick random techniques each iteration")\n'
             r'    simulate_parser.add_argument("--interval", type=int, default=30,\n'
-            r'        help="PATCH:local_ludus minutes between iterations (default 30)")\n'
+            r'        help="minutes between iterations (default 30)")\n'
             r'    simulate_parser.add_argument("--exclude", type=str, default="",\n'
-            r'        help="PATCH:local_ludus comma-separated T-IDs to never run")\n',
+            r'        help="comma-separated T-IDs to never run")\n',
             "PATCH:local_ludus-simulate-flags",
         )
 
@@ -184,46 +191,40 @@ def main() -> int:
         )
 
     if controller.exists():
-        # Wrap simulate() body in a loop. We rewrite the function signature
-        # to accept the new kwargs and prepend a small wrapper.
+        # Wrap simulate() body in a loop. We RENAME the existing
+        # `def simulate(self, target, techniques):` to `_simulate_inner`
+        # so its body becomes a callable, then prepend a wrapper method
+        # with the new signature. Indent is captured from the original
+        # def so this works regardless of class nesting.
         regex_patch(
             controller,
-            r'def\s+simulate\(self,\s*target[^)]*\):\s*\n',
-            'def simulate(self, target, techniques, loop=False, random_pick=False, '
-            'interval_minutes=30, exclude=""):  # PATCH:local_ludus-simulate-sig\n'
-            '        import time, random, csv, glob, os\n'
-            '        excluded = {t.strip() for t in (exclude or "").split(",") if t.strip()}\n'
-            '\n'
-            '        def _pick_random_technique():\n'
-            '            # Pull from Atomics index CSV shipped with redcanaryco/atomic-red-team.\n'
-            '            paths = sorted(glob.glob("/opt/atomic-red-team/atomics/Indexes/Indexes-CSV/*.csv"))\n'
-            '            techs = set()\n'
-            '            for p in paths:\n'
-            '                with open(p, newline="") as fh:\n'
-            '                    for row in csv.DictReader(fh):\n'
-            '                        tid = (row.get("Technique #") or "").strip()\n'
-            '                        if tid.startswith("T") and tid not in excluded:\n'
-            '                            techs.add(tid)\n'
-            '            return random.choice(sorted(techs)) if techs else "T1082"\n'
-            '\n'
-            '        def _run_once(_techs):\n'
-            '            self.log.info(f"simulate: target={target} techniques={_techs}")\n'
-            '            return self._simulate_inner(target, _techs)  # PATCH:local_ludus-inner\n'
-            '\n'
-            '        if not loop:\n'
-            '            chosen = _pick_random_technique() if random_pick else techniques\n'
-            '            return _run_once(chosen)\n'
-            '\n'
-            '        self.log.info(f"simulate --loop: interval={interval_minutes}m exclude={excluded}")\n'
-            '        while True:\n'
-            '            chosen = _pick_random_technique() if random_pick else techniques\n'
-            '            try:\n'
-            '                _run_once(chosen)\n'
-            '            except Exception as e:\n'
-            '                self.log.warning(f"iteration failed ({chosen}): {e}")\n'
-            '            time.sleep(interval_minutes * 60)\n'
-            '\n'
-            '    def _simulate_inner(self, target, techniques):  # PATCH:local_ludus-inner-orig\n',
+            r'^(?P<indent>[ \t]*)def\s+simulate\(self,\s*target,\s*techniques\)\s*:\s*\n',
+            r'\g<indent>def simulate(self, target, techniques, loop=False, random_pick=False, '
+            r'interval_minutes=30, exclude=""):  # PATCH:local_ludus-simulate-sig\n'
+            r'\g<indent>    import time, random, csv, glob\n'
+            r'\g<indent>    _excluded = {t.strip() for t in (exclude or "").split(",") if t.strip()}\n'
+            r'\g<indent>    def _pick():\n'
+            r'\g<indent>        paths = sorted(glob.glob("/opt/atomic-red-team/atomics/Indexes/Indexes-CSV/*.csv"))\n'
+            r'\g<indent>        techs = set()\n'
+            r'\g<indent>        for p in paths:\n'
+            r'\g<indent>            with open(p, newline="") as fh:\n'
+            r'\g<indent>                for row in csv.DictReader(fh):\n'
+            r'\g<indent>                    tid = (row.get("Technique #") or "").strip()\n'
+            r'\g<indent>                    if tid.startswith("T") and tid not in _excluded:\n'
+            r'\g<indent>                        techs.add(tid)\n'
+            r'\g<indent>        return random.choice(sorted(techs)) if techs else "T1082"\n'
+            r'\g<indent>    if not loop:\n'
+            r'\g<indent>        return self._simulate_inner(target, _pick() if random_pick else techniques)\n'
+            r'\g<indent>    self.log.info(f"simulate --loop: interval={interval_minutes}m exclude={_excluded}")\n'
+            r'\g<indent>    while True:\n'
+            r'\g<indent>        chosen = _pick() if random_pick else techniques\n'
+            r'\g<indent>        try:\n'
+            r'\g<indent>            self._simulate_inner(target, chosen)\n'
+            r'\g<indent>        except Exception as e:\n'
+            r'\g<indent>            self.log.warning(f"simulate iteration failed ({chosen}): {e}")\n'
+            r'\g<indent>        time.sleep(interval_minutes * 60)\n'
+            r'\n'
+            r'\g<indent>def _simulate_inner(self, target, techniques):  # PATCH:local_ludus-inner\n',
             "PATCH:local_ludus-simulate-sig",
         )
 

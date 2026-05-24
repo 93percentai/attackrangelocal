@@ -30,6 +30,7 @@ case "$MODE" in
     ;;
   --windows)
     envsubst < "${REPO_ROOT}/ansible/inventory.yml.j2" > "${REPO_ROOT}/ansible/inventory.yml"
+    ansible-galaxy collection install -r "${REPO_ROOT}/ansible/requirements.yml" 1>&2
     ansible-playbook \
       -i "${REPO_ROOT}/ansible/inventory.yml" \
       "${REPO_ROOT}/ansible/atomic-runner.yml"

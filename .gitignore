@@ -16,6 +16,10 @@ iso/cache/
 ludus/range-config.yml
 ansible/inventory.yml
 
+# User-supplied user list (copy of splunk-users.example.yml). Has plaintext
+# passwords — never commit.
+ludus/splunk-users.yml
+
 # Attack Range fork (cloned by bootstrap.sh, not tracked in this repo)
 attack_range_fork/upstream/
 
@@ -31,3 +35,4 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+__pycache__/

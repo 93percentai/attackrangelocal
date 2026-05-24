@@ -24,20 +24,7 @@
       register: splunk_bin
       failed_when: not splunk_bin.stat.exists
 
-    - name: Parse inline SPLUNK_USERS env var
-      ansible.builtin.set_fact:
-        users_inline: >-
-          {{ splunk_users_env.split(',')
-             | map('trim')
-             | select('truthy')
-             | map('split', ':')
-             | map('community.general.dict_from_list', ['name','password','role'])
-             | list }}
-      when: splunk_users_env | length > 0
-      failed_when: false  # graceful if no community.general — fall back below
-
-    - name: Fallback parse if community.general not present
-      when: splunk_users_env | length > 0 and users_inline is not defined
+    - name: Parse inline SPLUNK_USERS env var (Jinja template)
       ansible.builtin.set_fact:
         users_inline: "{{ users_inline_tmp }}"
       vars:
@@ -45,10 +32,13 @@
           [
             {% for entry in splunk_users_env.split(',') %}
               {% set parts = entry.strip().split(':') %}
-              {"name": "{{ parts[0] }}", "password": "{{ parts[1] }}", "role": "{{ parts[2] | default('user') }}"}
+              {"name": "{{ parts[0] }}",
+               "password": "{{ parts[1] }}",
+               "role": "{{ parts[2] if (parts | length) > 2 else 'user' }}"}
               {% if not loop.last %},{% endif %}
             {% endfor %}
           ]
+      when: splunk_users_env | length > 0
 
     - name: Load splunk-users.yml if present
       ansible.builtin.set_fact:
