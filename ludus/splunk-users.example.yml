@@ -1,0 +1,24 @@
+# Splunk users to create on the splunk VM, IN ADDITION to the default `admin`.
+#
+# Copy this file to `ludus/splunk-users.yml` (git-ignored by default) and edit.
+# `ansible/splunk-users.yml` reads it and creates the users idempotently.
+#
+# For simple inline use, you can instead set SPLUNK_USERS in .env:
+#     SPLUNK_USERS=alice:Pw!4Alice:admin,bob:Pw!4Bob:power,charlie:Pw!4Charlie:user
+#
+# Roles: admin | power | user | can_delete  (or any Splunk built-in role)
+
+- name: alice
+  password: "ChangeMe!Alice_16chars"
+  role: admin
+  email: alice@range.local
+
+- name: bob
+  password: "ChangeMe!Bob_16chars"
+  role: power
+  email: bob@range.local
+
+- name: charlie
+  password: "ChangeMe!Charlie_16chars"
+  role: user
+  email: charlie@range.local

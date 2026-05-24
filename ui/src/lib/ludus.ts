@@ -24,12 +24,13 @@ async function run(cmd: string, timeoutMs = 5000): Promise<string> {
 }
 
 export const VM_INVENTORY = [
-  { name: "dc01",         role: "AD primary DC",     os: "Win Server 2022", vlan_ip: 5,  cpu: 4, ram: 8 },
-  { name: "winclient1",   role: "Domain member",     os: "Windows 11",      vlan_ip: 20, cpu: 4, ram: 6 },
-  { name: "winsrv1",      role: "Domain member",     os: "Win Server 2022", vlan_ip: 21, cpu: 4, ram: 6 },
-  { name: "splunk",       role: "Splunk Enterprise", os: "Ubuntu 22.04",    vlan_ip: 10, cpu: 8, ram: 16 },
-  { name: "linux",        role: "Linux victim",      os: "Ubuntu 22.04",    vlan_ip: 30, cpu: 2, ram: 4 },
-  { name: "kali",         role: "Attacker",          os: "Kali Rolling",    vlan_ip: 40, cpu: 2, ram: 4 },
+  { name: "dc01",         role: "AD primary DC",     os: "Win Server 2022", vlan_ip: 5,  cpu: 2, ram: 3 },
+  { name: "winclient1",   role: "Domain member",     os: "Windows 11",      vlan_ip: 20, cpu: 2, ram: 4 },
+  { name: "winsrv1",      role: "Domain member",     os: "Win Server 2022", vlan_ip: 21, cpu: 1, ram: 2 },
+  { name: "splunk",       role: "Splunk Enterprise", os: "Ubuntu 22.04",    vlan_ip: 10, cpu: 2, ram: 5 },
+  { name: "elastic",      role: "Elastic + Kibana",  os: "Ubuntu 22.04",    vlan_ip: 50, cpu: 2, ram: 4 },
+  { name: "linux",        role: "Linux victim",      os: "Ubuntu 22.04",    vlan_ip: 30, cpu: 1, ram: 2 },
+  { name: "kali",         role: "Attacker",          os: "Kali Rolling",    vlan_ip: 40, cpu: 2, ram: 2 },
 ] as const;
 
 export type VmStatus = {

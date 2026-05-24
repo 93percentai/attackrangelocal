@@ -58,6 +58,18 @@ bash "$PAYLOAD_DIR/scripts/install-roles.sh"
 phase deploy-range
 bash "$PAYLOAD_DIR/scripts/deploy-range.sh"
 
+phase install-monitoring
+# Bring up Elastic stack on `elastic` VM, enroll Elastic Agents on every
+# Win/Linux host, apply extra Splunk users. Egress still open for image pulls.
+bash "$PAYLOAD_DIR/scripts/install-monitoring.sh" || \
+  echo "WARN: monitoring install failed (range still up, continue)"
+
+phase install-extended-attacks
+# Pull APT Simulator, PurpleSharp, EICAR, CALDERA + (optionally) defused
+# samples from abuse.ch. Runs BEFORE lockdown so external pulls still work.
+bash "$PAYLOAD_DIR/scripts/install-extended-attacks.sh" || \
+  echo "WARN: extended attacks install failed (range still up, continue)"
+
 phase lock-down-egress
 bash "$PAYLOAD_DIR/scripts/lock-down.sh"
 

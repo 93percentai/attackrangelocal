@@ -1,0 +1,97 @@
+---
+# Enrolls Elastic Agents on every Windows and Linux lab host into the
+# Fleet Server running on `elastic`. After this, every host ships
+# Sysmon/Winlogbeat/auditd telemetry to BOTH Splunk (via the existing
+# Splunk UF) AND Elastic. Dual-pane detection engineering.
+
+- name: Fetch the Fleet enrollment token from the elastic host
+  hosts: "{{ range_id | default(lookup('env','RANGE_ID')) }}-elastic"
+  gather_facts: false
+  tasks:
+    - name: Slurp enrollment token
+      ansible.builtin.slurp:
+        src: /opt/elastic-stack/fleet-enrollment.token
+      register: fleet_token_raw
+
+    - name: Set token as fact on every group
+      ansible.builtin.set_fact:
+        fleet_token: "{{ (fleet_token_raw.content | b64decode).strip() }}"
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['windows'] + groups['linux'] }}"
+
+# -------- Windows --------------------------------------------------------
+- name: Install Elastic Agent on Windows hosts
+  hosts: windows
+  gather_facts: false
+  vars:
+    elastic_version: "{{ lookup('env','ELASTIC_VERSION') | default('8.15.0', true) }}"
+    fleet_host: "http://{{ range_id | default(lookup('env','RANGE_ID')) }}-elastic:8220"
+    install_dir: 'C:\Program Files\Elastic\Agent'
+
+  tasks:
+    - name: Skip enrollment if agent already installed
+      ansible.windows.win_stat:
+        path: "{{ install_dir }}\\elastic-agent.exe"
+      register: agent_installed
+
+    - name: Download Elastic Agent
+      when: not agent_installed.stat.exists
+      ansible.windows.win_get_url:
+        url: "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-{{ elastic_version }}-windows-x86_64.zip"
+        dest: "C:\\Windows\\Temp\\elastic-agent.zip"
+
+    - name: Extract
+      when: not agent_installed.stat.exists
+      community.windows.win_unzip:
+        src:  "C:\\Windows\\Temp\\elastic-agent.zip"
+        dest: "C:\\Windows\\Temp\\"
+        creates: "C:\\Windows\\Temp\\elastic-agent-{{ elastic_version }}-windows-x86_64\\elastic-agent.exe"
+
+    - name: Run elastic-agent install with Fleet enrollment
+      when: not agent_installed.stat.exists
+      ansible.windows.win_command: >-
+        C:\Windows\Temp\elastic-agent-{{ elastic_version }}-windows-x86_64\elastic-agent.exe install
+        --url={{ fleet_host }}
+        --enrollment-token={{ fleet_token }}
+        --insecure
+        --non-interactive
+
+# -------- Linux ----------------------------------------------------------
+- name: Install Elastic Agent on Linux hosts
+  hosts: linux
+  become: true
+  gather_facts: true
+  vars:
+    elastic_version: "{{ lookup('env','ELASTIC_VERSION') | default('8.15.0', true) }}"
+    fleet_host: "http://{{ range_id | default(lookup('env','RANGE_ID')) }}-elastic:8220"
+
+  tasks:
+    - name: Check if agent already installed
+      ansible.builtin.stat:
+        path: /usr/bin/elastic-agent
+      register: agent_bin
+
+    - name: Download Elastic Agent tarball
+      when: not agent_bin.stat.exists
+      ansible.builtin.get_url:
+        url: "https://artifacts.elastic.co/downloads/beats/elastic-agent/elastic-agent-{{ elastic_version }}-linux-x86_64.tar.gz"
+        dest: /tmp/elastic-agent.tar.gz
+        mode: '0644'
+
+    - name: Extract
+      when: not agent_bin.stat.exists
+      ansible.builtin.unarchive:
+        src: /tmp/elastic-agent.tar.gz
+        dest: /tmp/
+        remote_src: yes
+        creates: "/tmp/elastic-agent-{{ elastic_version }}-linux-x86_64/elastic-agent"
+
+    - name: Enroll Elastic Agent into Fleet
+      when: not agent_bin.stat.exists
+      ansible.builtin.command: >-
+        /tmp/elastic-agent-{{ elastic_version }}-linux-x86_64/elastic-agent install
+        --url={{ fleet_host }}
+        --enrollment-token={{ fleet_token }}
+        --insecure
+        --non-interactive

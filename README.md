@@ -13,9 +13,14 @@ the WireGuard piece swapped for Tailscale.
 
 ## What this repo gives you
 
-- A **Ludus** range definition (`ludus/range-config.yml.j2`) for a 6-VM
-  topology: AD forest (DC + 2 members), Splunk, Linux victim, Kali
-  attacker — all on one isolated VLAN, all joined to your tailnet
+- A **Ludus** range definition (`ludus/range-config.yml.j2`) for a 7-VM
+  topology: AD forest (DC + 2 members), Splunk, **Elastic / Kibana**,
+  Linux victim, Kali attacker — all on one isolated VLAN, all joined to
+  your tailnet
+- **Two SIEMs running in parallel** (Splunk + Elastic) against the same
+  telemetry. Sysmon / Winlogbeat / auditd ship to BOTH stacks via
+  Universal Forwarder + Elastic Agent. Multi-user Splunk supported via
+  `.env` or `ludus/splunk-users.yml`.
 - A **patched Attack Range v5 fork** (`attack_range_fork/`) with:
   - new `local_ludus` provider (no Terraform, no cloud)
   - WireGuard phase bypassed (Tailscale already provides VPN)
@@ -50,7 +55,7 @@ attackrangelocal/
 │   └── new-files/               #   files copied in (local_ludus_provider.py, template)
 ├── docker/                      # Compose override that wires the patched fork to Ludus
 ├── ui/                          # Replacement Astro web UI (port 4321)
-├── ansible/                     # Static inventory + Atomic Runner playbook + schedule
+├── ansible/                     # Inventory + Atomic Runner + Elastic stack + Splunk-users playbooks
 ├── iso/                         # Unattended Proxmox ISO build pipeline
 │   ├── answer.toml.j2           #   Proxmox auto-installer answer file
 │   ├── first-boot.sh            #   runs once on the freshly-installed host
@@ -90,7 +95,9 @@ ssh root@proxmox
 cd /opt/attackrangelocal
 scripts/bootstrap-ludus.sh         # installs Ludus
 scripts/install-roles.sh           # roles + templates (~75 min)
-scripts/deploy-range.sh            # deploys all 6 VMs  (~45 min)
+scripts/deploy-range.sh            # deploys all 7 VMs  (~45 min)
+scripts/install-monitoring.sh      # Elastic stack + Splunk users
+scripts/install-extended-attacks.sh # APT Simulator, CALDERA, defused samples (optional)
 scripts/lock-down.sh               # cuts off internet egress
 scripts/start-continuous-sim.sh    # kicks off Atomic Runner on win-client1
 scripts/verify-isolation.sh        # MUST return 0
@@ -106,19 +113,40 @@ scripts/start-attack-range.sh      # docker compose up (UI on :4321, API :4000)
 ## Hardware
 
 - x86_64 host, Passmark > 6,000
-- **≥ 64 GB RAM** (44 GB allocated to lab VMs, headroom for Proxmox)
+- **≥ 30 GB RAM**, **≥ 16 threads** (whole-system ceiling — fits 32 GB / 16-core boxes)
 - **≥ 500 GB SSD**
 - **Wired** internet (during bootstrap only)
 
+Footprint (lab 22 GB / 12 vCPU + Proxmox + router):
+
+| Component | RAM | vCPU |
+|---|---:|---:|
+| dc01        | 3 GB | 2 |
+| winclient1  | 4 GB | 2 |
+| winsrv1     | 2 GB | 1 |
+| splunk      | 5 GB | 2 |
+| elastic     | 4 GB | 2 |
+| linux       | 2 GB | 1 |
+| kali        | 2 GB | 2 |
+| Proxmox host | ~3 GB | ~1 |
+| Ludus router | ~1 GB | ~1 |
+| Headroom | ~4 GB | ~2 |
+| **Total** | **~30 GB** | **~16** |
+
+Drop `winsrv1` from the range config (-2 GB / -1 vCPU) if you need to fit a smaller box.
+
 ## Verification (after deploy + lockdown)
 
-1. `tailscale status` lists 7 hosts (Proxmox + 6 VMs)
-2. `https://<RANGE_ID>-splunk:8000` over tailnet — `admin / changeme123!`
-3. Splunk: `index=* host=*winclient1*` shows Sysmon EID 1 within 5 min
-4. `scripts/verify-isolation.sh` exits 0 (no internet from lab VMs)
-5. From `kali`: `nmap 10.${RANGE_ID}.20.0/24` enumerates lab hosts
-6. Every ~30 min: a randomly chosen ATT&CK technique fires and lands in
-   Splunk
+1. `tailscale status` lists 8 hosts (Proxmox + 7 VMs)
+2. `http://<RANGE_ID>-splunk:8000` over tailnet — `admin / changeme123!`,
+   plus any extra users from `SPLUNK_USERS` / `splunk-users.yml`
+3. `http://<RANGE_ID>-elastic:5601` over tailnet — `elastic / $ELASTIC_PASSWORD`
+4. Splunk **and** Kibana: Sysmon EID 1 from `winclient1` lands in both
+   within 5 min
+5. `scripts/verify-isolation.sh` exits 0 (no internet from lab VMs)
+6. From `kali`: `nmap 10.${RANGE_ID}.20.0/24` enumerates lab hosts
+7. Every ~30 min: a randomly chosen ATT&CK technique fires and lands in
+   both SIEMs
 
 ## Teardown
 
@@ -138,6 +166,8 @@ Cleanly deregisters Tailscale devices, then destroys the VMs in Proxmox.
 - [`docs/tailscale-acls.md`](docs/tailscale-acls.md) — keep the range off other tailnet devices
 - [`docs/ad-forest.md`](docs/ad-forest.md) — forest topology, credentials, extending
 - [`docs/continuous-simulation.md`](docs/continuous-simulation.md) — Atomic Runner schedule, both loop paths
+- [`docs/extended-attacks.md`](docs/extended-attacks.md) — APT Simulator, PurpleSharp, CALDERA, defused malware samples
+- [`docs/monitoring.md`](docs/monitoring.md) — Splunk + Elastic side-by-side, multi-user setup
 - [`docs/ui.md`](docs/ui.md) — replacement web UI tour + dev loop
 
 ## Credits

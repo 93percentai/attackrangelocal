@@ -48,7 +48,7 @@ a systemd oneshot unit Proxmox's installer registers. It:
   or Discord ping on every phase transition
 
 Total wall-clock time from USB-insertion to "Splunk reachable + continuous
-attacks firing": **~3 hours** on a 64 GB host.
+attacks firing": **~3 hours** on a 32 GB host.
 
 ## Build the ISO
 

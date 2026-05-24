@@ -1,0 +1,146 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import StatusBadge from "@/components/StatusBadge.astro";
+import { exec as execCb } from "node:child_process";
+import { promisify } from "node:util";
+import { RANGE } from "@/lib/ludus";
+
+const exec = promisify(execCb);
+
+const target = `${RANGE.id}-winclient1`;
+const kali   = `${RANGE.id}-kali`;
+const admin  = process.env.AD_DOMAIN_ADMIN ?? "rangeadmin";
+
+async function safe(cmd: string, ms = 8000): Promise<string> {
+  try { return (await exec(cmd, { timeout: ms })).stdout.trim(); }
+  catch (e: any) { return `__error__:${e?.stderr ?? e?.message ?? ""}`.trim(); }
+}
+
+// Manifest of staged samples (JSON written by malware-samples.yml)
+const manifestRaw = await safe(
+  `ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new ` +
+  `${admin}@${target} 'powershell -NoProfile -Command "Get-Content C:\\Quarantine\\manifest.json"' 2>/dev/null`
+);
+let samples: Array<{ file: string; sha256: string; size: number }> = [];
+let archivePassword = "infected";
+try {
+  const m = JSON.parse(manifestRaw);
+  samples = m.samples ?? [];
+  archivePassword = m.archive_password ?? "infected";
+} catch { /* no manifest yet */ }
+
+// Probe whether CALDERA is reachable on kali (port 8888).
+const calderaProbe = await safe(`curl -s -o /dev/null -w '%{http_code}' http://${kali}:8888/`, 4000);
+const calderaUp = calderaProbe === "200" || calderaProbe === "302" || calderaProbe === "401";
+---
+<BaseLayout
+  title="Extended attacks"
+  lead="Beyond Atomic Runner: APT Simulator, PurpleSharp, EICAR, MITRE CALDERA, and detonation of defused malware samples staged on win-client1."
+>
+  <!-- Tool inventory -->
+  <section class="card card-pad">
+    <h2 class="mb-3 text-lg">Installed tooling</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+      <div class="rounded-md border border-line bg-panel2/50 p-3">
+        <div class="font-mono text-accent">APT Simulator</div>
+        <div class="text-xs text-muted mt-0.5">Inert APT-style artifacts (HOSTS, schtasks, registry IOCs)</div>
+        <div class="mt-2 font-mono text-[11px]">C:\AttackTools\apt-simulator\run.bat</div>
+      </div>
+      <div class="rounded-md border border-line bg-panel2/50 p-3">
+        <div class="font-mono text-accent">PurpleSharp</div>
+        <div class="text-xs text-muted mt-0.5">C#/.NET ATT&CK simulation</div>
+        <div class="mt-2 font-mono text-[11px]">C:\AttackTools\purplesharp\PurpleSharp.exe sim -p safe-techniques.txt</div>
+      </div>
+      <div class="rounded-md border border-line bg-panel2/50 p-3">
+        <div class="font-mono text-accent">EICAR</div>
+        <div class="text-xs text-muted mt-0.5">Universal AV/EDR test string</div>
+        <div class="mt-2 font-mono text-[11px]">C:\Users\Public\Documents\eicar.com</div>
+      </div>
+      <div class="rounded-md border border-line bg-panel2/50 p-3 flex justify-between items-start">
+        <div>
+          <div class="font-mono text-accent">MITRE CALDERA</div>
+          <div class="text-xs text-muted mt-0.5">Adversary emulation server on kali · sandcat agent on winclient1</div>
+          <a href={`http://${kali}:8888/`} target="_blank" class="mt-2 inline-block text-xs font-mono">
+            http://{kali}:8888 ↗
+          </a>
+        </div>
+        <StatusBadge tone={calderaUp ? "ok" : "muted"} label={calderaUp ? "up" : "unreachable"} />
+      </div>
+    </div>
+  </section>
+
+  <!-- Defused malware samples -->
+  <section class="card card-pad space-y-3">
+    <div class="flex items-baseline justify-between">
+      <div>
+        <h2 class="text-lg">Defused malware samples</h2>
+        <p class="text-xs text-muted mt-0.5">
+          Password-protected ZIPs staged in <span class="kbd">C:\Quarantine</span> on {target}.
+          Detonation requires <span class="kbd">DETONATE</span> confirmation and isolation-verified.
+        </p>
+      </div>
+      <StatusBadge tone={samples.length ? "ok" : "muted"} label={`${samples.length} staged`} />
+    </div>
+
+    {samples.length === 0 ? (
+      <div class="rounded-md border border-line bg-panel2/30 p-4 text-xs text-muted">
+        No samples staged yet. Either:
+        <ul class="list-disc ml-5 mt-2 space-y-1">
+          <li>The unattended install hasn't reached <span class="kbd">install-extended-attacks</span> phase yet</li>
+          <li><span class="kbd">MALWARE_BAZAAR_API_KEY</span> is unset in <span class="kbd">.env</span> (samples skipped intentionally)</li>
+          <li>You can still drop EICAR with the button below — universal, totally safe.</li>
+        </ul>
+      </div>
+    ) : (
+      <table class="w-full text-xs">
+        <thead class="text-[10px] uppercase tracking-wider text-muted">
+          <tr>
+            <th class="text-left py-2">SHA-256</th>
+            <th class="text-left">Archive</th>
+            <th class="text-right">Size</th>
+            <th class="text-right">Action</th>
+          </tr>
+        </thead>
+        <tbody class="font-mono">
+          {samples.map(s => (
+            <tr class="border-t border-line/60">
+              <td class="py-2 text-accent truncate max-w-xs">{s.sha256.slice(0, 24)}…</td>
+              <td>{s.file}</td>
+              <td class="text-right text-muted">{(s.size / 1024).toFixed(0)} KB</td>
+              <td class="text-right">
+                <form action="/api/detonate" method="post" class="inline">
+                  <input type="hidden" name="hash" value={s.sha256} />
+                  <button class="btn btn-danger text-xs">▶ detonate</button>
+                </form>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+
+    <div class="flex gap-2 pt-2 border-t border-line">
+      <form action="/api/detonate" method="post">
+        <input type="hidden" name="hash" value="--eicar" />
+        <button class="btn btn-primary">▶  Drop EICAR test file</button>
+      </form>
+      <a href="/network" class="btn">Check isolation first ↗</a>
+    </div>
+
+    <p class="text-[11px] text-muted mt-2">
+      Archive password: <span class="kbd">{archivePassword}</span> · Detonation has a 60 s watchdog · Samples never leave the VLAN
+    </p>
+  </section>
+
+  <!-- Reference -->
+  <section class="card card-pad text-sm">
+    <h2 class="mb-2 text-lg">Reference</h2>
+    <ul class="list-disc ml-5 text-xs space-y-1 text-ink">
+      <li>Install / re-run: <span class="kbd">scripts/install-extended-attacks.sh</span></li>
+      <li>List samples: <span class="kbd">scripts/list-samples.sh</span></li>
+      <li>Detonate from CLI: <span class="kbd">scripts/detonate-sample.sh &lt;sha256&gt;</span></li>
+      <li>Add more hashes: edit <span class="kbd">ansible/malware-samples.yml</span> → <span class="kbd">bazaar_hashes:</span></li>
+      <li>Full guide: <a href="/docs/extended-attacks.md">docs/extended-attacks.md</a></li>
+    </ul>
+  </section>
+</BaseLayout>

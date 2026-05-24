@@ -51,10 +51,10 @@ const lockedDown =
       <div class="mt-1 text-base text-ink">Splunk Web</div>
       <div class="text-xs text-muted mt-1 font-mono">{`http://${RANGE.id}-splunk:8000`}</div>
     </a>
-    <a href="/simulate" class="card card-pad no-underline hover:border-accent transition-colors">
-      <div class="h-label">Drive</div>
-      <div class="mt-1 text-base text-ink">Run a technique</div>
-      <div class="text-xs text-muted mt-1">One-off Atomic Red Team simulate via the patched fork.</div>
+    <a href={`http://${RANGE.id}-elastic:5601`} target="_blank" class="card card-pad no-underline hover:border-accent transition-colors">
+      <div class="h-label">Open</div>
+      <div class="mt-1 text-base text-ink">Kibana (Elastic)</div>
+      <div class="text-xs text-muted mt-1 font-mono">{`http://${RANGE.id}-elastic:5601`}</div>
     </a>
     <a href="/network" class="card card-pad no-underline hover:border-accent transition-colors">
       <div class="h-label">Verify</div>

@@ -100,3 +100,10 @@ docker compose exec attack_range python attack_range.py simulate \
 ```
 
 Then return to the long-running Atomic Runner for the steady drumbeat.
+
+## Going further
+
+For richer attack surface — APT Simulator inert artifacts, PurpleSharp
+.NET techniques, CALDERA adversary emulation, and detonating real (but
+defused) malware samples — see [`extended-attacks.md`](extended-attacks.md).
+The extended tooling installs automatically during unattended ISO boot.

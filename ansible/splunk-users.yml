@@ -1,0 +1,82 @@
+---
+# Adds extra users to Splunk Enterprise on the splunk VM.
+#
+# Reads either:
+#   - SPLUNK_USERS env var:  "user:pw:role[,user:pw:role]..."
+#   - ludus/splunk-users.yml (richer schema; see splunk-users.example.yml)
+#
+# Idempotent: existing users are left alone (no destructive password reset).
+
+- name: Add extra Splunk users
+  hosts: "{{ range_id | default(lookup('env','RANGE_ID')) }}-splunk"
+  become: true
+  gather_facts: false
+
+  vars:
+    splunk_admin_password: "{{ lookup('env','SPLUNK_ADMIN_PASSWORD') | default('changeme123!', true) }}"
+    splunk_users_env:      "{{ lookup('env','SPLUNK_USERS') | default('', true) }}"
+    splunk_users_file:     "{{ playbook_dir }}/../ludus/splunk-users.yml"
+    splunk_home: /opt/splunk
+
+  tasks:
+    - name: Verify Splunk is installed
+      ansible.builtin.stat: { path: "{{ splunk_home }}/bin/splunk" }
+      register: splunk_bin
+      failed_when: not splunk_bin.stat.exists
+
+    - name: Parse inline SPLUNK_USERS env var
+      ansible.builtin.set_fact:
+        users_inline: >-
+          {{ splunk_users_env.split(',')
+             | map('trim')
+             | select('truthy')
+             | map('split', ':')
+             | map('community.general.dict_from_list', ['name','password','role'])
+             | list }}
+      when: splunk_users_env | length > 0
+      failed_when: false  # graceful if no community.general — fall back below
+
+    - name: Fallback parse if community.general not present
+      when: splunk_users_env | length > 0 and users_inline is not defined
+      ansible.builtin.set_fact:
+        users_inline: "{{ users_inline_tmp }}"
+      vars:
+        users_inline_tmp: >-
+          [
+            {% for entry in splunk_users_env.split(',') %}
+              {% set parts = entry.strip().split(':') %}
+              {"name": "{{ parts[0] }}", "password": "{{ parts[1] }}", "role": "{{ parts[2] | default('user') }}"}
+              {% if not loop.last %},{% endif %}
+            {% endfor %}
+          ]
+
+    - name: Load splunk-users.yml if present
+      ansible.builtin.set_fact:
+        users_file: "{{ lookup('file', splunk_users_file) | from_yaml }}"
+      when: splunk_users_file is exists
+      ignore_errors: true
+
+    - name: Merge both sources
+      ansible.builtin.set_fact:
+        all_users: "{{ (users_inline | default([])) + (users_file | default([])) }}"
+
+    - name: List current Splunk users
+      ansible.builtin.command: >-
+        {{ splunk_home }}/bin/splunk list user -auth admin:{{ splunk_admin_password }}
+      register: existing_users
+      changed_when: false
+
+    - name: Create users that don't already exist
+      ansible.builtin.command: >-
+        {{ splunk_home }}/bin/splunk add user {{ user.name }}
+          -password '{{ user.password }}'
+          -role {{ user.role | default('user') }}
+          -auth admin:{{ splunk_admin_password }}
+      loop: "{{ all_users }}"
+      loop_control: { loop_var: user, label: "{{ user.name }} ({{ user.role | default('user') }})" }
+      when: user.name not in (existing_users.stdout | regex_findall('username:\\s+(\\S+)'))
+      no_log: true
+
+    - name: Restart Splunk so the new users land
+      ansible.builtin.command: "{{ splunk_home }}/bin/splunk restart"
+      when: all_users | length > 0

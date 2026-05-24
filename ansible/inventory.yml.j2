@@ -39,6 +39,16 @@ all:
         ${RANGE_ID}-splunk:
           splunk_admin_password: changeme123!
 
+    elastic:
+      vars:
+        ansible_connection: ssh
+        ansible_user: ubuntu
+      hosts:
+        ${RANGE_ID}-elastic:
+          kibana_port: 5601
+          elasticsearch_port: 9200
+          fleet_port: 8220
+
     linux:
       vars:
         ansible_connection: ssh
