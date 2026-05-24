@@ -50,23 +50,59 @@
       ansible.builtin.set_fact:
         all_users: "{{ (users_inline | default([])) + (users_file | default([])) }}"
 
-    - name: List current Splunk users
-      ansible.builtin.command: >-
-        {{ splunk_home }}/bin/splunk list user -auth admin:{{ splunk_admin_password }}
-      register: existing_users
+    - name: List current Splunk users via REST
+      # We use the REST API instead of `splunk list user` because the CLI
+      # touches /opt/splunk/var/run/splunk/splunkd.pid, which requires the
+      # same uid as splunkd. On real Ludus VMs Splunk runs as root and the
+      # CLI works; on container-based deployments (and dockerized splunk)
+      # splunkd runs as `splunk` and the CLI from root fails with EACCES.
+      # The REST API works in both cases.
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:8089/services/authentication/users?output_mode=json&count=0"
+        user: admin
+        password: "{{ splunk_admin_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        status_code: 200
+      register: existing_users_resp
       changed_when: false
 
-    - name: Create users that don't already exist
-      ansible.builtin.command: >-
-        {{ splunk_home }}/bin/splunk add user {{ user.name }}
-          -password '{{ user.password }}'
-          -role {{ user.role | default('user') }}
-          -auth admin:{{ splunk_admin_password }}
-      loop: "{{ all_users }}"
-      loop_control: { loop_var: user, label: "{{ user.name }} ({{ user.role | default('user') }})" }
-      when: user.name not in (existing_users.stdout | regex_findall('username:\\s+(\\S+)'))
-      no_log: true
+    - name: Compute the set of existing usernames
+      ansible.builtin.set_fact:
+        existing_usernames: "{{ existing_users_resp.json.entry | map(attribute='name') | list }}"
 
-    - name: Restart Splunk so the new users land
-      ansible.builtin.command: "{{ splunk_home }}/bin/splunk restart"
-      when: all_users | length > 0
+    - name: Create users that don't already exist (via REST API)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:8089/services/authentication/users?output_mode=json"
+        method: POST
+        user: admin
+        password: "{{ splunk_admin_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        body_format: form-urlencoded
+        body:
+          name: "{{ user.name }}"
+          password: "{{ user.password }}"
+          roles: "{{ user.role | default('user') }}"
+        status_code: [201]
+      loop: "{{ all_users }}"
+      loop_control:
+        loop_var: user
+        label: "{{ user.name }} ({{ user.role | default('user') }})"
+      when: user.name not in existing_usernames
+      no_log: true
+      register: user_create
+
+    - name: Report how many users were created
+      ansible.builtin.debug:
+        msg: >-
+          {{ user_create.results
+             | default([])
+             | selectattr('changed', 'defined')
+             | selectattr('changed')
+             | list
+             | length }} new Splunk users created
+          (skipped {{ existing_usernames | length }} pre-existing)
+
+    # Splunk REST-API user creates take effect immediately; no restart
+    # needed (unlike conf-file edits).
