@@ -23,10 +23,10 @@ root_ssh_keys = ["${OPERATOR_SSH_PUBKEY}"]
 source = "from-dhcp"
 
 [disk-setup]
-filesystem  = "ext4"
+filesystem = "ext4"
 # Wipe and use the first disk presented to the installer. CHANGE this if
 # the host has multiple disks and you want a specific target.
-disk_selection.disk_list = ["sda"]
+disk_list  = ["sda"]
 
 [first-boot]
 # Pull the first-boot script from the ISO itself (not from a URL). The

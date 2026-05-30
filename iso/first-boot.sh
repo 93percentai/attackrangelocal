@@ -4,16 +4,24 @@
 # lockdown, continuous simulation) without any operator interaction.
 #
 # Triggered by the [first-boot] stanza in answer.toml. The Proxmox auto-
-# installer copies this file to /var/lib/proxmox-firstboot and registers a
+# installer copies this file into the installed system and registers a
 # systemd oneshot unit that calls it after network is up.
+#
+# IMPORTANT: this file is a TEMPLATE. iso/build-iso.sh generates the real
+# script (first-boot-wrapped.sh) by prepending:
+#   - An embedded `secrets.env` (your .env contents)
+#   - A `REPO_REF` pin (git SHA of the repo state at build time)
+# and then inlining the rest of THIS file. The wrapper is < 1 MiB so it
+# fits PAI's first-boot size limit; the repo itself is git-cloned during
+# first-boot from REPO_URL@REPO_REF for reproducible deploys.
 #
 # Logs to /var/log/attackrangelocal-firstboot.log (also visible via
 # `journalctl -u proxmox-firstboot`).
 set -euo pipefail
 exec > >(tee -a /var/log/attackrangelocal-firstboot.log) 2>&1
 
-PAYLOAD_TAR=/var/lib/proxmox-firstboot/attackrangelocal-payload.tar.gz
 PAYLOAD_DIR=/opt/attackrangelocal
+SECRETS_FILE=/var/lib/proxmox-firstboot/secrets.env
 STATUS_FILE=/var/lib/ludus-bootstrap/status
 
 mkdir -p "$(dirname "$STATUS_FILE")"
@@ -32,16 +40,28 @@ phase() {
 phase wait-for-network
 until ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; do sleep 2; done
 
-phase extract-payload
-mkdir -p "$PAYLOAD_DIR"
-tar -xzf "$PAYLOAD_TAR" -C "$PAYLOAD_DIR"
+phase install-git
+# Proxmox VE base image doesn't ship git; install it before cloning.
+apt-get update -qq
+apt-get install -y --no-install-recommends git >/dev/null
 
-# secrets.env was rendered into the payload by build-iso.sh.
-if [[ -f "$PAYLOAD_DIR/iso/payload/secrets.env" ]]; then
-  set -a; source "$PAYLOAD_DIR/iso/payload/secrets.env"; set +a
+phase clone-repo
+# REPO_URL and REPO_REF are injected by iso/build-iso.sh at the top of the
+# wrapped script (so changing the repo URL / pinned commit doesn't require
+# editing this file).
+: "${REPO_URL:?REPO_URL must be defined by the wrapper}"
+: "${REPO_REF:?REPO_REF must be defined by the wrapper}"
+rm -rf "$PAYLOAD_DIR"
+git clone "$REPO_URL" "$PAYLOAD_DIR"
+git -C "$PAYLOAD_DIR" checkout "$REPO_REF"
+
+# secrets.env was written by the wrapper before this script's main body ran.
+# Source it for the rest of the phases, and copy it into the cloned repo
+# as .env so deploy-range.sh / install-monitoring.sh find it.
+if [[ -f "$SECRETS_FILE" ]]; then
+  set -a; source "$SECRETS_FILE"; set +a
+  install -m 600 "$SECRETS_FILE" "$PAYLOAD_DIR/.env"
 fi
-# Also make .env available at repo root so deploy-range.sh works.
-cp "$PAYLOAD_DIR/iso/payload/secrets.env" "$PAYLOAD_DIR/.env"
 
 phase install-tailscale-on-host
 # Operator can immediately ssh root@<host> via Tailscale once this finishes.

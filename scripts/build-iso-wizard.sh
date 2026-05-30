@@ -426,6 +426,12 @@ do_build() {
   elif grep -qi 'No space left on device' "$log"; then
     err "Disk filled up during build."
     note "Free up space (rm iso/cache/proxmox-ve_*.iso to drop the cache) and retry."
+  elif grep -qiE 'curl: \(22\).*404|HTTP/[0-9.]+ 404' "$log"; then
+    err "Proxmox ISO URL returned 404."
+    note "The release this build script pins may have been retired. Check"
+    note "  http://enterprise.proxmox.com/iso/   for the current filename, then"
+    note "  PROXMOX_ISO_URL=https://enterprise.proxmox.com/iso/proxmox-ve_X.Y-1.iso \\"
+    note "    ./scripts/build-iso-wizard.sh --build-only"
   elif grep -qiE 'curl: \(2[28]\)|Failed to connect' "$log"; then
     err "Network connection died mid-download."
     note "Retry; the cached ISO under iso/cache/ resumes correctly."
