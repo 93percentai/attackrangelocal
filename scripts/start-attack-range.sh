@@ -17,9 +17,10 @@ if [[ ! -d "$FORK_DIR" ]]; then
   exit 1
 fi
 
-# Render inventory from current .env
+# Render inventory from current .env (RANGE_MODE picks full vs minimal)
 set -a; source "${REPO_ROOT}/.env"; set +a
-envsubst < "${REPO_ROOT}/ansible/inventory.yml.j2" > "${REPO_ROOT}/ansible/inventory.yml"
+source "${REPO_ROOT}/scripts/lib/render-inventory.sh"
+render_inventory
 
 cd "${REPO_ROOT}"
 docker compose \

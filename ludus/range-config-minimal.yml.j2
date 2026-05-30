@@ -1,0 +1,154 @@
+# Minimal range — fits a 16 GB / 256 GB host.
+#
+# Selected when RANGE_MODE=minimal in .env. Topology:
+#   - dc01        Win Server 2022, AD primary DC + file/IIS server
+#   - winclient1  Windows 11, domain-joined, Atomic Runner target
+#   - splunk      Ubuntu 22.04, Splunk Enterprise (only SIEM in this mode)
+#   - linux       Ubuntu 22.04, victim host
+#   - kali        Kali Rolling, attacker (CALDERA + automated red team)
+#
+# No Elastic stack. No separate winsrv1 — the DC absorbs that role.
+# Disks are thin-provisioned and sized small. Total disk allocation
+# ~116 GB; actual on-host usage tends to land around 60–80 GB.
+#
+# Schema reference: https://docs.ludus.cloud/docs/configuration/
+
+network:
+  inter_vlan_default: REJECT
+  external_default: REJECT
+  always_blocked_networks:
+    - 10.0.0.0/8
+    - 192.168.0.0/16
+    - 172.16.0.0/12
+
+  rules:
+    # Bootstrap egress for the 5 VMs only — flipped to REJECT by lock-down.sh
+    - { name: bootstrap-splunk-https,  vlan_src: 20, ip_last_octet_src: 10, vlan_dst: public, protocol: tcp, ports: 443, action: ACCEPT }
+    - { name: bootstrap-splunk-http,   vlan_src: 20, ip_last_octet_src: 10, vlan_dst: public, protocol: tcp, ports: 80,  action: ACCEPT }
+    - { name: bootstrap-win-client1,   vlan_src: 20, ip_last_octet_src: 20, vlan_dst: public, protocol: tcp, ports: 443, action: ACCEPT }
+    - { name: bootstrap-dc01,          vlan_src: 20, ip_last_octet_src: 5,  vlan_dst: public, protocol: tcp, ports: 443, action: ACCEPT }
+    - { name: bootstrap-linux,         vlan_src: 20, ip_last_octet_src: 30, vlan_dst: public, protocol: tcp, ports: 443, action: ACCEPT }
+    - { name: bootstrap-kali,          vlan_src: 20, ip_last_octet_src: 40, vlan_dst: public, protocol: tcp, ports: 443, action: ACCEPT }
+    - { name: bootstrap-apt-http,      vlan_src: 20, vlan_dst: public, protocol: tcp, ports: 80, action: ACCEPT }
+
+    # Permanent — survives lock-down.sh
+    - { name: tailscale-udp, vlan_src: 20, vlan_dst: public, protocol: udp, ports: 41641, action: ACCEPT }
+    - { name: dns,           vlan_src: 20, vlan_dst: public, protocol: udp, ports: 53,    action: ACCEPT }
+
+defaults:
+  ad_domain_admin: ${AD_DOMAIN_ADMIN}
+  ad_domain_admin_password: ${AD_PASSWORD}
+  timezone: UTC
+  enable_dynamic_wallpaper: false
+  stale_hours: 0
+
+x-tailscale-vars: &ts
+  tailscale_state: present
+  tailscale_authkey: ${TS_AUTHKEY}
+  tailscale_api_key: ${TS_API_KEY}
+  tailscale_ssh: true
+  tailscale_dns: true
+  tailscale_tags:
+    - ${TS_TAG}
+
+ludus:
+  # -------------------------------------------------------------------------
+  # Combined DC + member server
+  # Holds the AD forest root AND any future file/IIS shares.
+  # -------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-dc01"
+    hostname: "{{ range_id }}-DC01"
+    template: win2022-server-x64-template
+    vlan: 20
+    ip_last_octet: 5
+    ram_gb: 4
+    cpus: 2
+    vm_disk_gb: 32
+    windows:
+      sysprep: false
+    domain:
+      fqdn: ${AD_DOMAIN_FQDN}
+      role: primary-dc
+    roles:
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts
+      tailscale_dns: false   # DC stays AD-DNS authoritative
+
+  # -------------------------------------------------------------------------
+  # Domain member — Windows 11 client (continuous attack target)
+  # -------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-winclient1"
+    hostname: "{{ range_id }}-WINCLIENT1"
+    template: win11-22h2-x64-enterprise-template
+    vlan: 20
+    ip_last_octet: 20
+    ram_gb: 3
+    cpus: 2
+    vm_disk_gb: 32
+    windows:
+      sysprep: false
+    domain:
+      fqdn: ${AD_DOMAIN_FQDN}
+      role: member
+    roles:
+      - P4T12ICK.ludus_ar_windows
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts
+      ludus_ar_windows_splunk_ip: "10.${RANGE_ID}.20.10"
+
+  # -------------------------------------------------------------------------
+  # Splunk Enterprise — only SIEM in minimal mode
+  # -------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-splunk"
+    hostname: "{{ range_id }}-splunk"
+    template: ubuntu-22.04-x64-server-template
+    vlan: 20
+    ip_last_octet: 10
+    ram_gb: 4
+    cpus: 2
+    vm_disk_gb: 24
+    linux: true
+    roles:
+      - P4T12ICK.ludus_ar_splunk
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts
+
+  # -------------------------------------------------------------------------
+  # Linux victim
+  # -------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-linux"
+    hostname: "{{ range_id }}-linux"
+    template: ubuntu-22.04-x64-server-template
+    vlan: 20
+    ip_last_octet: 30
+    ram_gb: 1
+    cpus: 1
+    vm_disk_gb: 12
+    linux: true
+    roles:
+      - P4T12ICK.ludus_ar_linux
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts
+      ludus_ar_linux_splunk_ip: "10.${RANGE_ID}.20.10"
+
+  # -------------------------------------------------------------------------
+  # Kali — attacker. Hosts CALDERA + atomic-red-team (Linux atomics) +
+  # automated red-team tooling.
+  # -------------------------------------------------------------------------
+  - vm_name: "{{ range_id }}-kali"
+    hostname: "{{ range_id }}-kali"
+    template: kali-x64-desktop-template
+    vlan: 20
+    ip_last_octet: 40
+    ram_gb: 2
+    cpus: 2
+    vm_disk_gb: 16
+    linux: true
+    roles:
+      - NocteDefensor.ludus_tailscale
+    role_vars:
+      <<: *ts

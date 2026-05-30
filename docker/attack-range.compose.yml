@@ -51,6 +51,7 @@ services:
       - PORT=4321
       # Reads from .env on the host. Add the variables you want exposed.
       - RANGE_ID=${RANGE_ID:-42}
+      - RANGE_MODE=${RANGE_MODE:-full}
       - AD_DOMAIN_FQDN=${AD_DOMAIN_FQDN:-range.local}
       - AD_DOMAIN_ADMIN=${AD_DOMAIN_ADMIN:-rangeadmin}
       - AD_PASSWORD=${AD_PASSWORD:-}

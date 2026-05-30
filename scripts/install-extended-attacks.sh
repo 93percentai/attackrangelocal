@@ -19,8 +19,10 @@ if [[ ! -f "${REPO_ROOT}/.env" ]]; then
 fi
 set -a; source "${REPO_ROOT}/.env"; set +a
 
-# Refresh inventory in case it isn't rendered yet.
-envsubst < "${REPO_ROOT}/ansible/inventory.yml.j2" > "${REPO_ROOT}/ansible/inventory.yml"
+# Refresh inventory in case it isn't rendered yet. Picks minimal/full based on
+# RANGE_MODE.
+source "${REPO_ROOT}/scripts/lib/render-inventory.sh"
+render_inventory
 
 if [[ "${SKIP_MALWARE_SAMPLES:-0}" == "0" && -z "${MALWARE_BAZAAR_API_KEY:-}" ]]; then
   echo "NOTE: MALWARE_BAZAAR_API_KEY not set. Skipping abuse.ch pull (EICAR + APT Simulator + PurpleSharp still install)."

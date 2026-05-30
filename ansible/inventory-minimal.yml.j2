@@ -1,0 +1,49 @@
+# Minimal-mode Ansible inventory (5 VMs: no winsrv1, no elastic).
+# Selected when RANGE_MODE=minimal. Same schema/groups as inventory.yml.j2.
+
+all:
+  vars:
+    ansible_user: "${AD_DOMAIN_ADMIN}"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
+
+  children:
+
+    windows:
+      vars:
+        ansible_connection: winrm
+        ansible_winrm_transport: ntlm
+        ansible_winrm_server_cert_validation: ignore
+        ansible_port: 5986
+        ansible_winrm_scheme: https
+        ansible_password: "${AD_PASSWORD}"
+      hosts:
+        ${RANGE_ID}-dc01:
+          attack_range_role: dc-and-server   # combined: DC + member-server roles
+          fqdn: "${RANGE_ID}-DC01.${AD_DOMAIN_FQDN}"
+        ${RANGE_ID}-winclient1:
+          attack_range_role: client
+          fqdn: "${RANGE_ID}-WINCLIENT1.${AD_DOMAIN_FQDN}"
+
+    splunk:
+      vars:
+        ansible_connection: ssh
+        ansible_user: ubuntu
+      hosts:
+        ${RANGE_ID}-splunk:
+          splunk_admin_password: changeme123!
+
+    linux:
+      vars:
+        ansible_connection: ssh
+        ansible_user: ubuntu
+      hosts:
+        ${RANGE_ID}-linux:
+          attack_range_role: victim
+
+    kali:
+      vars:
+        ansible_connection: ssh
+        ansible_user: kali
+      hosts:
+        ${RANGE_ID}-kali:
+          attack_range_role: attacker

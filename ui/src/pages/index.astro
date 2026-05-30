@@ -4,6 +4,8 @@ import VMCard from "@/components/VMCard.astro";
 import StatusBadge from "@/components/StatusBadge.astro";
 import { getVmStatuses, getBootstrapPhase, RANGE } from "@/lib/ludus";
 
+const rangeMode = (process.env.RANGE_MODE ?? "full").toLowerCase();
+const hasElastic = rangeMode !== "minimal";
 const [vms, phase] = await Promise.all([getVmStatuses(), getBootstrapPhase()]);
 const running = vms.filter(v => v.proxmox_state === "running").length;
 const online  = vms.filter(v => v.tailscale_state === "online").length;
@@ -12,7 +14,9 @@ const lockedDown =
 ---
 <BaseLayout
   title="Range overview"
-  lead="Six VMs on one isolated VLAN, joined to your tailnet. Splunk indexes everything. Continuous attacks fire against win-client1 on a 6-hour rotation."
+  lead={`${vms.length} VMs on one isolated VLAN, joined to your tailnet. ` +
+        `${hasElastic ? "Splunk + Elastic index" : "Splunk indexes"} everything. ` +
+        `Continuous attacks fire against win-client1 on a 6-hour rotation.`}
 >
   <!-- Top stat row -->
   <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -51,11 +55,13 @@ const lockedDown =
       <div class="mt-1 text-base text-ink">Splunk Web</div>
       <div class="text-xs text-muted mt-1 font-mono">{`http://${RANGE.id}-splunk:8000`}</div>
     </a>
-    <a href={`http://${RANGE.id}-elastic:5601`} target="_blank" class="card card-pad no-underline hover:border-accent transition-colors">
-      <div class="h-label">Open</div>
-      <div class="mt-1 text-base text-ink">Kibana (Elastic)</div>
-      <div class="text-xs text-muted mt-1 font-mono">{`http://${RANGE.id}-elastic:5601`}</div>
-    </a>
+    {hasElastic && (
+      <a href={`http://${RANGE.id}-elastic:5601`} target="_blank" class="card card-pad no-underline hover:border-accent transition-colors">
+        <div class="h-label">Open</div>
+        <div class="mt-1 text-base text-ink">Kibana (Elastic)</div>
+        <div class="text-xs text-muted mt-1 font-mono">{`http://${RANGE.id}-elastic:5601`}</div>
+      </a>
+    )}
     <a href="/network" class="card card-pad no-underline hover:border-accent transition-colors">
       <div class="h-label">Verify</div>
       <div class="mt-1 text-base text-ink">Isolation check</div>

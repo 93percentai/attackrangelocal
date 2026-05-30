@@ -29,7 +29,8 @@ case "$MODE" in
         --exclude "${SIM_EXCLUDE}"
     ;;
   --windows)
-    envsubst < "${REPO_ROOT}/ansible/inventory.yml.j2" > "${REPO_ROOT}/ansible/inventory.yml"
+    source "${REPO_ROOT}/scripts/lib/render-inventory.sh"
+    render_inventory
     ansible-galaxy collection install -r "${REPO_ROOT}/ansible/requirements.yml" 1>&2
     ansible-playbook \
       -i "${REPO_ROOT}/ansible/inventory.yml" \

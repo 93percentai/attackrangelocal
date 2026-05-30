@@ -105,8 +105,8 @@ ssh root@proxmox
 cd /opt/attackrangelocal
 scripts/bootstrap-ludus.sh         # installs Ludus
 scripts/install-roles.sh           # roles + templates (~75 min)
-scripts/deploy-range.sh            # deploys all 7 VMs  (~45 min)
-scripts/install-monitoring.sh      # Elastic stack + Splunk users
+scripts/deploy-range.sh            # deploys 5 or 7 VMs depending on RANGE_MODE
+scripts/install-monitoring.sh      # Splunk users (+ Elastic stack if RANGE_MODE=full)
 scripts/install-extended-attacks.sh # APT Simulator, CALDERA, defused samples (optional)
 scripts/lock-down.sh               # cuts off internet egress
 scripts/start-continuous-sim.sh    # kicks off Atomic Runner on win-client1
@@ -122,10 +122,17 @@ scripts/start-attack-range.sh      # docker compose up (UI on :4321, API :4000)
 
 ## Hardware
 
-- x86_64 host, Passmark > 6,000
-- **≥ 30 GB RAM**, **≥ 16 threads** (whole-system ceiling — fits 32 GB / 16-core boxes)
-- **≥ 500 GB SSD**
-- **Wired** internet (during bootstrap only)
+Two presets, picked by `RANGE_MODE` in `.env` (the wizard prompts you):
+
+| Mode | RAM | Threads | SSD | What you get |
+|---|---:|---:|---:|---|
+| `minimal` | **16 GB** | **12** | **256 GB** | 5 VMs: DC+server, win client, splunk, linux, kali. Splunk only — no Elastic. |
+| `full` (default) | **30 GB** | **16** | **500 GB** | 7 VMs: DC, 2 win members, splunk, **elastic**, linux, kali. Both SIEMs. |
+
+Either way: x86_64 host (Passmark > 6,000), wired internet during the
+~90-min bootstrap window only.
+
+Full-mode footprint (lab 22 GB / 12 vCPU + Proxmox + router):
 
 Footprint (lab 22 GB / 12 vCPU + Proxmox + router):
 
@@ -178,6 +185,7 @@ Cleanly deregisters Tailscale devices, then destroys the VMs in Proxmox.
 - [`docs/continuous-simulation.md`](docs/continuous-simulation.md) — Atomic Runner schedule, both loop paths
 - [`docs/extended-attacks.md`](docs/extended-attacks.md) — APT Simulator, PurpleSharp, CALDERA, defused malware samples
 - [`docs/monitoring.md`](docs/monitoring.md) — Splunk + Elastic side-by-side, multi-user setup
+- [`docs/minimal-mode.md`](docs/minimal-mode.md) — 16 GB / 256 GB topology, what's dropped vs full
 - [`docs/ui.md`](docs/ui.md) — replacement web UI tour + dev loop
 
 ## Credits
