@@ -71,6 +71,16 @@ attackrangelocal/
 Burn one USB, boot one box, walk away. ~3 hours later you have a fully
 running, isolated lab.
 
+**Easiest:** run the interactive wizard, which prompts for every config
+option with descriptions + validation, then builds the ISO and decodes
+any errors that come back.
+
+```bash
+./scripts/build-iso-wizard.sh
+```
+
+If you'd rather edit the .env by hand and call the build script directly:
+
 ```bash
 # On your laptop
 cp ludus/.env.example .env
