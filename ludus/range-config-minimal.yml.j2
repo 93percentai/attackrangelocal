@@ -8,8 +8,13 @@
 #   - kali        Kali Rolling, attacker (CALDERA + automated red team)
 #
 # No Elastic stack. No separate winsrv1 — the DC absorbs that role.
-# Disks are thin-provisioned and sized small. Total disk allocation
-# ~116 GB; actual on-host usage tends to land around 60–80 GB.
+#
+# Disk sizes use the Ludus template defaults (Windows ~64 GB, Ubuntu ~32 GB,
+# Kali ~50 GB — all thin-provisioned). Ludus's range-config schema does NOT
+# expose a per-VM disk-size field, so we can't shrink them from here. Actual
+# on-disk usage typically lands around 50-100 GB total for the minimal range.
+# If you need tighter disk control, edit the Proxmox template directly
+# (qm resize / qemu-img resize) before deploying.
 #
 # Schema reference: https://docs.ludus.cloud/docs/configuration/
 
@@ -68,7 +73,6 @@ ludus:
     ip_last_octet: 5
     ram_gb: 4
     cpus: 2
-    vm_disk_gb: 32
     windows:
       sysprep: false
     domain:
@@ -90,7 +94,6 @@ ludus:
     ip_last_octet: 20
     ram_gb: 3
     cpus: 2
-    vm_disk_gb: 32
     windows:
       sysprep: false
     domain:
@@ -113,7 +116,6 @@ ludus:
     ip_last_octet: 10
     ram_gb: 4
     cpus: 2
-    vm_disk_gb: 24
     linux: true
     roles:
       - P4T12ICK.ludus_ar_splunk
@@ -131,7 +133,6 @@ ludus:
     ip_last_octet: 30
     ram_gb: 1
     cpus: 1
-    vm_disk_gb: 12
     linux: true
     roles:
       - P4T12ICK.ludus_ar_linux
@@ -151,7 +152,6 @@ ludus:
     ip_last_octet: 40
     ram_gb: 2
     cpus: 2
-    vm_disk_gb: 16
     linux: true
     roles:
       - NocteDefensor.ludus_tailscale

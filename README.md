@@ -170,7 +170,7 @@ Drop `winsrv1` from the range config (-2 GB / -1 vCPU) if you need to fit a smal
 ## Teardown
 
 ```bash
-ssh root@ludus-host
+ssh root@ludus-attackrangelocal
 cd /opt/attackrangelocal
 scripts/teardown.sh --confirm
 ```

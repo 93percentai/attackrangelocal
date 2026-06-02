@@ -5,17 +5,20 @@ The whole thing fits a **16 GB RAM / 12 thread / 256 GB SSD** host.
 
 ## Topology
 
-| VM | RAM | vCPU | Disk | Role |
-|---|---:|---:|---:|---|
-| `dc01` | 4 GB | 2 | 32 GB | **DC + member-server combined** — AD root for `range.local`, file/IIS surface |
-| `winclient1` | 3 GB | 2 | 32 GB | Win 11, domain-joined, Atomic Runner + EICAR + APT Simulator target |
-| `splunk` | 4 GB | 2 | 24 GB | Splunk Enterprise — the **only SIEM** in this mode |
-| `linux` | 1 GB | 1 | 12 GB | Ubuntu victim with Sysmon-for-Linux + Splunk UF |
-| `kali` | 2 GB | 2 | 16 GB | Attacker — CALDERA server + atomic-red-team + automated red team tools |
+| VM | RAM | vCPU | Role |
+|---|---:|---:|---|
+| `dc01` | 4 GB | 2 | **DC + member-server combined** — AD root for `range.local`, file/IIS surface |
+| `winclient1` | 3 GB | 2 | Win 11, domain-joined, Atomic Runner + EICAR + APT Simulator target |
+| `splunk` | 4 GB | 2 | Splunk Enterprise — the **only SIEM** in this mode |
+| `linux` | 1 GB | 1 | Ubuntu victim with Sysmon-for-Linux + Splunk UF |
+| `kali` | 2 GB | 2 | Attacker — CALDERA server + atomic-red-team + automated red team tools |
 
-**Lab total: ~14 GB RAM, 9 vCPU, ~116 GB disk allocated.** With Proxmox
-+ Ludus router + headroom, the whole host sits around **~16 GB / 12
-threads / ~140 GB used** (thin-provisioned).
+**Lab total: ~14 GB RAM, 9 vCPU.** Disk sizes follow the Ludus template
+defaults (Ludus's range-config schema doesn't expose a per-VM disk-size
+field). Plan for ~150 GB across all 5 VMs (Windows templates are ~64 GB,
+Ubuntu ~32 GB, Kali ~50 GB — all thin-provisioned, so actual on-disk
+use is typically 60–100 GB total). With Proxmox + Ludus router + headroom
+the whole host sits around **~16 GB RAM / 12 threads / ~180 GB used**.
 
 ## What's NOT in minimal mode
 
@@ -63,16 +66,18 @@ skips the two Elastic playbooks.
 
 | Allocated | Size |
 |---|---:|
-| Lab VM disks (thin) | 116 GB |
 | Ludus templates (Win2022 + Win11 + Ubuntu + Kali) | ~80 GB |
+| Lab VM disks (5 VMs, thin-provisioned from templates) | ~60–100 GB used |
 | Proxmox host system | ~20 GB |
 | Ludus state + logs | ~5 GB |
 | Headroom for Splunk indexes growing | ~30 GB |
-| **Total** | **~250 GB** |
+| **Total** | **~200–235 GB** |
 
-If indexes grow past the budget, either:
-- Set Splunk's retention shorter (default 90 days is generous for a lab),
-- Or `vm_disk_gb: 32` on the splunk VM is the field to bump.
+If indexes grow past the budget:
+- Lower Splunk retention (default 90 days is generous for a lab — try 14)
+- Resize the Splunk VM's disk in place on the Proxmox host with
+  `qm resize <vmid> scsi0 -G` (Ludus's range-config schema has no per-VM
+  disk-size field, so disk tuning is a post-deploy operation).
 
 ## Resource budget (16 GB host)
 

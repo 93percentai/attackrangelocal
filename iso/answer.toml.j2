@@ -7,15 +7,18 @@
 # from the network.
 
 [global]
+# kebab-case keys: required for PVE 9.x forward-compat. PVE 8.4 accepts
+# both kebab-case and snake_case; 9.x emits deprecation warnings on
+# snake_case and will hard-fail in a future release.
 keyboard      = "en-us"
 country       = "us"
 fqdn          = "${PROXMOX_FQDN}"
 mailto        = "root@range.local"
 timezone      = "UTC"
-root_password = "${LUDUS_ADMIN_PASSWORD}"
+root-password = "${LUDUS_ADMIN_PASSWORD}"
 # Operator SSH key, baked from .env. Lets you ssh root@<host> immediately
 # after Proxmox finishes installing.
-root_ssh_keys = ["${OPERATOR_SSH_PUBKEY}"]
+root-ssh-keys = ["${OPERATOR_SSH_PUBKEY}"]
 
 [network]
 # DHCP on the first detected interface. Override to "from-answer" with
@@ -26,7 +29,7 @@ source = "from-dhcp"
 filesystem = "ext4"
 # Wipe and use the first disk presented to the installer. CHANGE this if
 # the host has multiple disks and you want a specific target.
-disk_list  = ["sda"]
+disk-list  = ["sda"]
 
 [first-boot]
 # Pull the first-boot script from the ISO itself (not from a URL). The

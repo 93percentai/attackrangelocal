@@ -27,7 +27,9 @@
       ansible.builtin.git:
         repo: https://github.com/mitre/caldera.git
         dest: "{{ caldera_dir }}"
-        version: master
+        # Pinned to a stable release tag — `master` has bitten us when MITRE
+        # ships an in-progress refactor. Bump as new releases land.
+        version: "{{ lookup('env','CALDERA_VERSION') | default('5.1.0', true) }}"
         recursive: yes
         depth: 1
 

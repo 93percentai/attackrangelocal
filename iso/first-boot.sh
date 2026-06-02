@@ -67,7 +67,8 @@ fi
 # When WIFI_ENABLE=true, switch from the install-time wired uplink to a
 # WiFi STA + NAT setup BEFORE Tailscale joins. From here on, every phase
 # below talks to the internet via WiFi.
-if [[ "${WIFI_ENABLE:-false,,}" == "true" ]]; then
+WIFI_ENABLE_NORM="${WIFI_ENABLE:-false}"
+if [[ "${WIFI_ENABLE_NORM,,}" =~ ^(true|yes|y|1)$ ]]; then
   phase install-wifi-firmware-offline
   # iso/build-iso.sh staged firmware .debs onto the install ISO under
   # /firmware/MANIFEST + /firmware/*.deb. If the install USB is still
@@ -126,14 +127,35 @@ bash "$PAYLOAD_DIR/scripts/deploy-range.sh"
 phase install-monitoring
 # Bring up Elastic stack on `elastic` VM, enroll Elastic Agents on every
 # Win/Linux host, apply extra Splunk users. Egress still open for image pulls.
-bash "$PAYLOAD_DIR/scripts/install-monitoring.sh" || \
-  echo "WARN: monitoring install failed (range still up, continue)"
+# If this fails we DO NOT proceed to lockdown — running lock-down.sh after
+# a half-installed monitoring stack would leave a lab with no telemetry and
+# no path to repair (egress cut). Halt loudly instead.
+MONITORING_OK=true
+bash "$PAYLOAD_DIR/scripts/install-monitoring.sh" || {
+  MONITORING_OK=false
+  echo "ERROR: monitoring install failed. See above for details."
+}
 
 phase install-extended-attacks
 # Pull APT Simulator, PurpleSharp, EICAR, CALDERA + (optionally) defused
 # samples from abuse.ch. Runs BEFORE lockdown so external pulls still work.
-bash "$PAYLOAD_DIR/scripts/install-extended-attacks.sh" || \
-  echo "WARN: extended attacks install failed (range still up, continue)"
+EXTENDED_OK=true
+bash "$PAYLOAD_DIR/scripts/install-extended-attacks.sh" || {
+  EXTENDED_OK=false
+  echo "ERROR: extended attacks install failed. See above for details."
+}
+
+if [[ "$MONITORING_OK" != "true" || "$EXTENDED_OK" != "true" ]]; then
+  phase abort-before-lockdown
+  echo "Halting BEFORE lockdown so you can ssh in and fix the failed step."
+  echo "  ssh root@${PROXMOX_FQDN%%.*}.<tailnet>"
+  echo "  cd /opt/attackrangelocal"
+  echo "  scripts/install-monitoring.sh        # re-run as needed"
+  echo "  scripts/install-extended-attacks.sh"
+  echo "  scripts/lock-down.sh                 # only after the above succeed"
+  echo "  scripts/start-continuous-sim.sh --windows"
+  exit 1
+fi
 
 phase lock-down-egress
 bash "$PAYLOAD_DIR/scripts/lock-down.sh"

@@ -32,6 +32,12 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 set -a; source "$ENV_FILE"; set +a
 
+# Normalise boolean-ish env vars so case-insensitive checks work safely.
+# (Bash's `${VAR:-default,,}` parses `,,` as part of the default string,
+# NOT as a case modifier — silent bug if you do that.)
+WIFI_ENABLE_NORM="${WIFI_ENABLE:-false}"
+export WIFI_ENABLE_NORM
+
 required=(RANGE_ID TS_AUTHKEY TS_API_KEY AD_DOMAIN_FQDN AD_DOMAIN_ADMIN
           AD_PASSWORD LUDUS_ADMIN_PASSWORD OPERATOR_SSH_PUBKEY TS_TAG
           PROXMOX_FQDN)
@@ -101,7 +107,7 @@ fi
 # firstboot/firmware/ via a side-channel staging dir on the ISO (NOT in
 # the first-boot wrapper) so first-boot can dpkg/cp them post-install.
 FW_DEBS=()
-if [[ "${WIFI_ENABLE:-false,,}" == "true" ]]; then
+if [[ "${WIFI_ENABLE_NORM,,}" == "true" ]]; then
   echo "==> WIFI_ENABLE=true — downloading firmware .debs for offline install..."
   FW_CACHE="${CACHE_DIR}/firmware"
   mkdir -p "$FW_CACHE"
@@ -190,7 +196,7 @@ proxmox-auto-install-assistant prepare-iso \
 # PAI doesn't let us add extra files. We post-process the ISO with xorriso
 # to add a /firmware/ tree (the .debs + a MANIFEST marker first-boot scans
 # for) while preserving the El Torito boot record.
-if [[ "${WIFI_ENABLE:-false,,}" == "true" && ${#FW_DEBS[@]} -gt 0 ]]; then
+if [[ "${WIFI_ENABLE_NORM,,}" == "true" && ${#FW_DEBS[@]} -gt 0 ]]; then
   echo "==> Injecting ${#FW_DEBS[@]} firmware .deb(s) into ISO..."
   STAGE="${BUILD_DIR}/firmware-stage"
   rm -rf "$STAGE"
