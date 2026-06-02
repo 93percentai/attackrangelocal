@@ -88,14 +88,6 @@ isn't supported (xorriso + Linux `dd` required) — use a Linux VM or WSL2.
   with zero operator input
 - **Tailscale ACLs** that confine lab access to your operator device only
 
-## Why not LocalStack Hobby?
-
-LocalStack Hobby is a free AWS-API emulator. It doesn't run real VMs
-(Docker-backed EC2 is a Pro feature and even Pro can't boot the Windows
-Server / Splunk AMIs Attack Range expects). It cannot host the actual
-Splunk + Windows + Kali workloads. Documented as a rejected alternative;
-Ludus is the only viable substrate.
-
 ## Repo layout
 
 ```
