@@ -11,6 +11,56 @@ challenges with VirtualBox and Vagrant") and v5 is cloud-only (AWS / Azure
 v5's goodness (web UI, REST API, simulator) on bare metal you own, with
 the WireGuard piece swapped for Tailscale.
 
+## Quick start
+
+Three commands on a Debian/Ubuntu laptop. The wizard handles everything
+else — pre-flight checks, prompts for every config option with sensible
+defaults, downloads the Proxmox ISO, bakes secrets in, produces a
+bootable USB image.
+
+```bash
+# 1. Clone
+git clone https://github.com/93percentai/attackrangelocal.git
+cd attackrangelocal
+
+# 2. Install build dependencies
+sudo apt update && sudo apt install -y \
+    gettext-base curl tar rsync coreutils xorriso openssl
+curl -fsSLo /tmp/paia.deb \
+  http://download.proxmox.com/debian/pve/dists/bookworm/pve-no-subscription/binary-amd64/proxmox-auto-install-assistant_8.4.6_amd64.deb
+sudo apt install -y /tmp/paia.deb && rm /tmp/paia.deb
+
+# 3. Run the wizard
+./scripts/build-iso-wizard.sh
+```
+
+That's it. The wizard will:
+
+1. Run pre-flight checks (and tell you exactly how to install anything missing)
+2. Walk you through every prompt — range mode (`full` vs `minimal`),
+   Tailscale keys, AD passwords, optional WiFi-uplink config, etc.
+   — with descriptions, defaults, and per-field validation
+3. Write `.env` (chmod 600)
+4. Download the Proxmox VE ISO (~1.5 GB, cached at `iso/cache/`)
+5. Bake `attackrangelocal-<RANGE_ID>-<DATE>.iso` at `iso/build/`
+6. Print the `dd` command to flash to a USB stick
+
+Flash, plug into the target box, boot. ~3 hours later you have a fully
+running, isolated lab reachable over Tailscale. See [`docs/unattended-iso.md`](docs/unattended-iso.md)
+for the full phase-by-phase rundown.
+
+**Before running the wizard, have ready:**
+- A Tailscale account, a reusable auth key (`tskey-auth-…`), and an API key (`tskey-api-…`) — generate at <https://login.tailscale.com/admin/settings/keys>
+- An SSH public key at `~/.ssh/id_ed25519.pub` (or any path — wizard accepts both pasted keys and paths)
+- 4 GB+ free disk on the build laptop
+- For the target box: ≥ 16 GB RAM / 12 threads / 256 GB SSD (minimal mode) or ≥ 30 GB / 16 threads / 500 GB (full mode), and **wired ethernet for the install** (WiFi can take over after — see [`docs/unattended-iso.md`](docs/unattended-iso.md))
+
+Other Linux distros: substitute the package manager. Fedora/RHEL:
+`dnf install gettext curl tar rsync coreutils xorriso openssl`. Arch:
+`pacman -S gettext curl tar rsync coreutils libisoburn openssl`. The
+Proxmox `.deb` works on these via `alien -i` or `dpkg-deb -x`. macOS
+isn't supported (xorriso + Linux `dd` required) — use a Linux VM or WSL2.
+
 ## What this repo gives you
 
 - A **Ludus** range definition (`ludus/range-config.yml.j2`) for a 7-VM
@@ -62,40 +112,21 @@ attackrangelocal/
 │   ├── answer.toml.j2           #   Proxmox auto-installer answer file
 │   ├── first-boot.sh            #   runs once on the freshly-installed host
 │   └── build-iso.sh             #   bakes everything into one bootable ISO
-├── scripts/                     # Operator helpers (deploy, lock-down, verify, teardown)
+├── scripts/                     # Operator helpers
+│   ├── build-iso-wizard.sh      #   interactive wizard — START HERE
+│   ├── bootstrap-ludus.sh       #   install Ludus on a fresh Proxmox host
+│   ├── deploy-range.sh          #   render range config + ludus range deploy
+│   ├── install-monitoring.sh    #   Splunk users + Elastic stack
+│   ├── lock-down.sh             #   cut off lab egress except Tailscale
+│   ├── verify-isolation.sh      #   prove the lockdown actually holds
+│   └── teardown.sh              #   destroy the range + deregister Tailscale
 └── docs/                        # Detailed per-topic runbooks
 ```
 
-## Two ways to use it
+## Alternative: manual, step-by-step (if you already have Proxmox)
 
-### Path 1 — Fully unattended (recommended)
-
-Burn one USB, boot one box, walk away. ~3 hours later you have a fully
-running, isolated lab.
-
-**Easiest:** run the interactive wizard, which prompts for every config
-option with descriptions + validation, then builds the ISO and decodes
-any errors that come back.
-
-```bash
-./scripts/build-iso-wizard.sh
-```
-
-If you'd rather edit the .env by hand and call the build script directly:
-
-```bash
-# On your laptop
-cp ludus/.env.example .env
-$EDITOR .env                                          # fill in every field
-sudo apt install proxmox-auto-install-assistant gettext-base
-./iso/build-iso.sh
-sudo dd if=iso/build/attackrangelocal-*.iso of=/dev/sdX bs=4M status=progress
-# Boot target box from USB. Done.
-```
-
-Full details: [`docs/unattended-iso.md`](docs/unattended-iso.md).
-
-### Path 2 — Manual, step-by-step (if you already have Proxmox)
+Skip the ISO entirely if your Proxmox VE is already installed and you
+just want to deploy the range on it:
 
 ```bash
 # On your laptop, render .env
