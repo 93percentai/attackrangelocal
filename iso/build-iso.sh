@@ -33,7 +33,12 @@ fi
 set -a; source "$ENV_FILE"; set +a
 
 required=(RANGE_ID TS_AUTHKEY TS_API_KEY AD_DOMAIN_FQDN AD_DOMAIN_ADMIN
-          AD_PASSWORD LUDUS_ADMIN_PASSWORD OPERATOR_SSH_PUBKEY TS_TAG)
+          AD_PASSWORD LUDUS_ADMIN_PASSWORD OPERATOR_SSH_PUBKEY TS_TAG
+          PROXMOX_FQDN)
+# Defaults for vars the build needs but downstream may have left empty on
+# an old .env. Keep this in sync with DEFAULTS in scripts/build-iso-wizard.sh.
+: "${PROXMOX_FQDN:=ludus-attackrangelocal.range.local}"
+export PROXMOX_FQDN
 for v in "${required[@]}"; do
   val="${!v:-}"
   if [[ -z "$val" || "$val" == REPLACE_ME* ]]; then

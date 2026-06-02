@@ -107,8 +107,11 @@ fi
 
 phase install-tailscale-on-host
 # Operator can immediately ssh root@<host> via Tailscale once this finishes.
+# The Tailscale hostname is the short name from PROXMOX_FQDN so MagicDNS
+# resolves `ssh root@ludus-attackrangelocal` cleanly.
+TS_HOSTNAME="${PROXMOX_FQDN%%.*}"
 curl -fsSL https://tailscale.com/install.sh | sh
-tailscale up --authkey="${TS_AUTHKEY}" --hostname="ludus-host" \
+tailscale up --authkey="${TS_AUTHKEY}" --hostname="${TS_HOSTNAME}" \
              --advertise-tags="${TS_TAG}" --ssh
 
 phase install-ludus
