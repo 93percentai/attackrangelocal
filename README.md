@@ -28,8 +28,10 @@ the WireGuard piece swapped for Tailscale.
 - A **replacement web UI** (`ui/`) built for this deployment — VM
   status, AD info, isolation checks, continuous-sim controls — instead
   of upstream's cloud-provider/WireGuard-sharing UI
-- **Deny-by-default egress** at the Ludus router — lab VMs cannot dial
-  the public internet after bootstrap completes
+- **Deny-by-default egress** at the Ludus router — after bootstrap, the
+  only outbound the lab keeps is what Tailscale needs (TCP/443, UDP/41641,
+  UDP/53). Operators on a different network reach the lab through this
+  Tailscale path; everything else (ICMP, arbitrary TCP, etc.) is dropped
 - An **unattended ISO** (`iso/build-iso.sh`) that installs Proxmox,
   bootstraps Ludus, builds templates, deploys the range, locks down
   egress, and starts continuous Atomic Red Team — all from a single USB

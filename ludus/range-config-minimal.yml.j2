@@ -31,9 +31,14 @@ network:
     - { name: bootstrap-kali,          vlan_src: 20, ip_last_octet_src: 40, vlan_dst: public, protocol: tcp, ports: 443, action: ACCEPT }
     - { name: bootstrap-apt-http,      vlan_src: 20, vlan_dst: public, protocol: tcp, ports: 80, action: ACCEPT }
 
-    # Permanent — survives lock-down.sh
-    - { name: tailscale-udp, vlan_src: 20, vlan_dst: public, protocol: udp, ports: 41641, action: ACCEPT }
-    - { name: dns,           vlan_src: 20, vlan_dst: public, protocol: udp, ports: 53,    action: ACCEPT }
+    # Permanent — survives lock-down.sh. Operators remote in from a different
+    # network via Tailscale, which needs:
+    #   UDP/41641  direct peer-to-peer
+    #   TCP/443    controlplane.tailscale.com + DERP relay fallback
+    #   UDP/53     DNS for resolving the controlplane hostname
+    - { name: tailscale-udp,   vlan_src: 20, vlan_dst: public, protocol: udp, ports: 41641, action: ACCEPT }
+    - { name: tailscale-https, vlan_src: 20, vlan_dst: public, protocol: tcp, ports: 443,   action: ACCEPT }
+    - { name: dns,             vlan_src: 20, vlan_dst: public, protocol: udp, ports: 53,    action: ACCEPT }
 
 defaults:
   ad_domain_admin: ${AD_DOMAIN_ADMIN}

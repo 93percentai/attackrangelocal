@@ -92,14 +92,26 @@ network:
       action: ACCEPT
 
     # ----- Permanent egress (NEVER removed by lock-down.sh) -----
-    # Tailscale needs UDP/41641 for direct connections; falls back to DERP
-    # over 443 which is covered by the bootstrap rules until lockdown, then
-    # by an explicit lockdown rule (see scripts/lock-down.sh).
+    # Tailscale needs:
+    #   - UDP/41641 for direct peer-to-peer connections
+    #   - TCP/443  for the control plane (controlplane.tailscale.com) AND
+    #              DERP relay fallback when direct P2P can't traverse NAT.
+    # Operators remote in from a different network entirely, so these stay
+    # open forever — otherwise the lab is unreachable post-lockdown.
+    # TCP/443 outbound to the wider internet is the unavoidable trade-off
+    # for Tailscale to function; Sysmon + Splunk still log every connection
+    # so suspicious egress is auditable.
     - name: tailscale-udp
       vlan_src: 20
       vlan_dst: public
       protocol: udp
       ports: 41641
+      action: ACCEPT
+    - name: tailscale-https
+      vlan_src: 20
+      vlan_dst: public
+      protocol: tcp
+      ports: 443
       action: ACCEPT
     # DNS to the router only (the router resolves upstream; lab VMs cannot
     # use 8.8.8.8 directly).
