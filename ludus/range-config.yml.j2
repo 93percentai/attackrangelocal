@@ -125,6 +125,10 @@ network:
 defaults:
   ad_domain_admin: ${AD_DOMAIN_ADMIN}
   ad_domain_admin_password: ${AD_PASSWORD}
+  # Same password for the Directory Services Restore Mode account.
+  # If unset, Ludus generates a random one; we set it explicitly so
+  # operators have a single password to remember for the forest.
+  ad_domain_safe_mode_password: ${AD_PASSWORD}
   timezone: UTC
   enable_dynamic_wallpaper: false
   stale_hours: 0

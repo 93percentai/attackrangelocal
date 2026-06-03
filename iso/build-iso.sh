@@ -37,6 +37,14 @@ set -a; source "$ENV_FILE"; set +a
 # NOT as a case modifier — silent bug if you do that.)
 WIFI_ENABLE_NORM="${WIFI_ENABLE:-false}"
 export WIFI_ENABLE_NORM
+# Single target disk for the Proxmox install. PVE 8.4 only allows ONE disk
+# in disk-list for ext4. Default = nvme0n1 (most modern laptops & 2020+ SSDs).
+# Common overrides:
+#   sda        SATA / SCSI drives (older laptops, server SATA)
+#   nvme0n1    NVMe (modern laptops, M.2 SSDs) -- DEFAULT
+#   vda        VirtIO (nested QEMU/KVM testing)
+: "${DISK_DEVICE_LIST:='["nvme0n1"]'}"
+export DISK_DEVICE_LIST
 
 required=(RANGE_ID TS_AUTHKEY TS_API_KEY AD_DOMAIN_FQDN AD_DOMAIN_ADMIN
           AD_PASSWORD LUDUS_ADMIN_PASSWORD OPERATOR_SSH_PUBKEY TS_TAG
