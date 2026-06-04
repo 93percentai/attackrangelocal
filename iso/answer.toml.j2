@@ -7,15 +7,21 @@
 # from the network.
 
 [global]
+# kebab-case keys: required for PVE 9.x forward-compat. PVE 8.4 accepts
+# both kebab-case and snake_case; 9.x emits deprecation warnings on
+# snake_case and will hard-fail in a future release.
 keyboard      = "en-us"
 country       = "us"
-fqdn          = "ludus-host.range.local"
+fqdn          = "${PROXMOX_FQDN}"
 mailto        = "root@range.local"
 timezone      = "UTC"
-root_password = "${LUDUS_ADMIN_PASSWORD}"
+root-password = "${LUDUS_ADMIN_PASSWORD}"
 # Operator SSH key, baked from .env. Lets you ssh root@<host> immediately
 # after Proxmox finishes installing.
-root_ssh_keys = ["${OPERATOR_SSH_PUBKEY}"]
+root-ssh-keys = ["${OPERATOR_SSH_PUBKEY}"]
+# Reboot the installer on transient errors (network blip, disk write failure)
+# instead of hanging at an error screen forever — the lab is unattended.
+reboot-on-error = true
 
 [network]
 # DHCP on the first detected interface. Override to "from-answer" with
@@ -23,10 +29,15 @@ root_ssh_keys = ["${OPERATOR_SSH_PUBKEY}"]
 source = "from-dhcp"
 
 [disk-setup]
-filesystem  = "ext4"
-# Wipe and use the first disk presented to the installer. CHANGE this if
-# the host has multiple disks and you want a specific target.
-disk_selection.disk_list = ["sda"]
+filesystem = "ext4"
+# Try common device names in priority order. The installer picks the FIRST
+# that actually exists on the target:
+#   - nvme0n1   modern laptops + most consumer SSDs in M.2 slots
+#   - sda       SATA / SCSI (older laptops, server SATA drives)
+#   - vda       VirtIO (QEMU / cloud VMs — handy for testing in nested KVM)
+# If your host has multiple internal disks and you want a specific one,
+# override DISK_DEVICE_LIST in .env (e.g. DISK_DEVICE_LIST='["nvme1n1"]').
+disk-list = ${DISK_DEVICE_LIST}
 
 [first-boot]
 # Pull the first-boot script from the ISO itself (not from a URL). The

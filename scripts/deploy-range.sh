@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Renders ludus/range-config.yml.j2 from .env and tells Ludus to deploy.
+# Renders a ludus/range-config-*.yml.j2 from .env and tells Ludus to deploy.
+# Template is selected by RANGE_MODE (full | minimal).
 # Blocks until the range reports SUCCESS (or fails out).
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-TEMPLATE="${REPO_ROOT}/ludus/range-config.yml.j2"
-OUT="${REPO_ROOT}/ludus/range-config.yml"
 ENV_FILE="${REPO_ROOT}/.env"
 STATUS_FILE=/var/lib/ludus-bootstrap/status
 
@@ -17,6 +16,17 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 
 set -a; source "$ENV_FILE"; set +a
+
+# RANGE_MODE picks which template to render. Default = full for backward
+# compatibility with .env files that pre-date minimal mode.
+RANGE_MODE="${RANGE_MODE:-full}"
+case "$RANGE_MODE" in
+  full)    TEMPLATE="${REPO_ROOT}/ludus/range-config.yml.j2" ;;
+  minimal) TEMPLATE="${REPO_ROOT}/ludus/range-config-minimal.yml.j2" ;;
+  *) echo "RANGE_MODE must be 'full' or 'minimal' (got: $RANGE_MODE)" >&2; exit 1 ;;
+esac
+OUT="${REPO_ROOT}/ludus/range-config.yml"
+echo "Using $RANGE_MODE-mode template: $TEMPLATE"
 
 required=(RANGE_ID TS_AUTHKEY TS_API_KEY AD_DOMAIN_FQDN AD_DOMAIN_ADMIN AD_PASSWORD TS_TAG)
 for v in "${required[@]}"; do

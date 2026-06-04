@@ -18,20 +18,26 @@ if [[ ! -f "${REPO_ROOT}/.env" ]]; then
 fi
 set -a; source "${REPO_ROOT}/.env"; set +a
 
-envsubst < "${REPO_ROOT}/ansible/inventory.yml.j2" > "${REPO_ROOT}/ansible/inventory.yml"
+source "${REPO_ROOT}/scripts/lib/render-inventory.sh"
+render_inventory
 
 echo "=== 0/3  Ensure ansible collections are installed ==="
 ansible-galaxy collection install -r "${REPO_ROOT}/ansible/requirements.yml" 1>&2
 
-echo "=== 1/3  Elastic stack on ${RANGE_ID}-elastic ==="
-ansible-playbook \
-  -i "${REPO_ROOT}/ansible/inventory.yml" \
-  "${REPO_ROOT}/ansible/elastic-stack.yml"
+if [[ "${RANGE_MODE:-full}" == "minimal" ]]; then
+  echo "=== 1/3  Elastic stack — SKIPPED (RANGE_MODE=minimal: Splunk only) ==="
+  echo "=== 2/3  Elastic Agents — SKIPPED ==="
+else
+  echo "=== 1/3  Elastic stack on ${RANGE_ID}-elastic ==="
+  ansible-playbook \
+    -i "${REPO_ROOT}/ansible/inventory.yml" \
+    "${REPO_ROOT}/ansible/elastic-stack.yml"
 
-echo "=== 2/3  Elastic Agents on every Windows + Linux host ==="
-ansible-playbook \
-  -i "${REPO_ROOT}/ansible/inventory.yml" \
-  "${REPO_ROOT}/ansible/elastic-agents.yml"
+  echo "=== 2/3  Elastic Agents on every Windows + Linux host ==="
+  ansible-playbook \
+    -i "${REPO_ROOT}/ansible/inventory.yml" \
+    "${REPO_ROOT}/ansible/elastic-agents.yml"
+fi
 
 echo "=== 3/3  Extra Splunk users ==="
 if [[ -z "${SPLUNK_USERS:-}" && ! -f "${REPO_ROOT}/ludus/splunk-users.yml" ]]; then
@@ -46,6 +52,10 @@ cat <<EOF
 
 Monitoring stack ready.
   Splunk:  http://${RANGE_ID}-splunk:8000
+EOF
+if [[ "${RANGE_MODE:-full}" != "minimal" ]]; then
+cat <<EOF
   Kibana:  http://${RANGE_ID}-elastic:5601    (login: elastic / \$ELASTIC_PASSWORD)
   Fleet:   http://${RANGE_ID}-elastic:8220
 EOF
+fi

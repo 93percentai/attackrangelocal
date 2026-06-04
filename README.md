@@ -11,6 +11,56 @@ challenges with VirtualBox and Vagrant") and v5 is cloud-only (AWS / Azure
 v5's goodness (web UI, REST API, simulator) on bare metal you own, with
 the WireGuard piece swapped for Tailscale.
 
+## Quick start
+
+Three commands on a Debian/Ubuntu laptop. The wizard handles everything
+else — pre-flight checks, prompts for every config option with sensible
+defaults, downloads the Proxmox ISO, bakes secrets in, produces a
+bootable USB image.
+
+```bash
+# 1. Clone
+git clone https://github.com/93percentai/attackrangelocal.git
+cd attackrangelocal
+
+# 2. Install build dependencies
+sudo apt update && sudo apt install -y \
+    gettext-base curl tar rsync coreutils xorriso openssl
+curl -fsSLo /tmp/paia.deb \
+  http://download.proxmox.com/debian/pve/dists/bookworm/pve-no-subscription/binary-amd64/proxmox-auto-install-assistant_8.4.6_amd64.deb
+sudo apt install -y /tmp/paia.deb && rm /tmp/paia.deb
+
+# 3. Run the wizard
+./scripts/build-iso-wizard.sh
+```
+
+That's it. The wizard will:
+
+1. Run pre-flight checks (and tell you exactly how to install anything missing)
+2. Walk you through every prompt — range mode (`full` vs `minimal`),
+   Tailscale keys, AD passwords, optional WiFi-uplink config, etc.
+   — with descriptions, defaults, and per-field validation
+3. Write `.env` (chmod 600)
+4. Download the Proxmox VE ISO (~1.5 GB, cached at `iso/cache/`)
+5. Bake `attackrangelocal-<RANGE_ID>-<DATE>.iso` at `iso/build/`
+6. Print the `dd` command to flash to a USB stick
+
+Flash, plug into the target box, boot. ~3 hours later you have a fully
+running, isolated lab reachable over Tailscale. See [`docs/unattended-iso.md`](docs/unattended-iso.md)
+for the full phase-by-phase rundown.
+
+**Before running the wizard, have ready:**
+- A Tailscale account, a reusable auth key (`tskey-auth-…`), and an API key (`tskey-api-…`) — generate at <https://login.tailscale.com/admin/settings/keys>
+- An SSH public key at `~/.ssh/id_ed25519.pub` (or any path — wizard accepts both pasted keys and paths)
+- 4 GB+ free disk on the build laptop
+- For the target box: ≥ 16 GB RAM / 12 threads / 256 GB SSD (minimal mode) or ≥ 30 GB / 16 threads / 500 GB (full mode), and **wired ethernet for the install** (WiFi can take over after — see [`docs/unattended-iso.md`](docs/unattended-iso.md))
+
+Other Linux distros: substitute the package manager. Fedora/RHEL:
+`dnf install gettext curl tar rsync coreutils xorriso openssl`. Arch:
+`pacman -S gettext curl tar rsync coreutils libisoburn openssl`. The
+Proxmox `.deb` works on these via `alien -i` or `dpkg-deb -x`. macOS
+isn't supported (xorriso + Linux `dd` required) — use a Linux VM or WSL2.
+
 ## What this repo gives you
 
 - A **Ludus** range definition (`ludus/range-config.yml.j2`) for a 7-VM
@@ -28,21 +78,15 @@ the WireGuard piece swapped for Tailscale.
 - A **replacement web UI** (`ui/`) built for this deployment — VM
   status, AD info, isolation checks, continuous-sim controls — instead
   of upstream's cloud-provider/WireGuard-sharing UI
-- **Deny-by-default egress** at the Ludus router — lab VMs cannot dial
-  the public internet after bootstrap completes
+- **Deny-by-default egress** at the Ludus router — after bootstrap, the
+  only outbound the lab keeps is what Tailscale needs (TCP/443, UDP/41641,
+  UDP/53). Operators on a different network reach the lab through this
+  Tailscale path; everything else (ICMP, arbitrary TCP, etc.) is dropped
 - An **unattended ISO** (`iso/build-iso.sh`) that installs Proxmox,
   bootstraps Ludus, builds templates, deploys the range, locks down
   egress, and starts continuous Atomic Red Team — all from a single USB
   with zero operator input
 - **Tailscale ACLs** that confine lab access to your operator device only
-
-## Why not LocalStack Hobby?
-
-LocalStack Hobby is a free AWS-API emulator. It doesn't run real VMs
-(Docker-backed EC2 is a Pro feature and even Pro can't boot the Windows
-Server / Splunk AMIs Attack Range expects). It cannot host the actual
-Splunk + Windows + Kali workloads. Documented as a rejected alternative;
-Ludus is the only viable substrate.
 
 ## Repo layout
 
@@ -60,30 +104,21 @@ attackrangelocal/
 │   ├── answer.toml.j2           #   Proxmox auto-installer answer file
 │   ├── first-boot.sh            #   runs once on the freshly-installed host
 │   └── build-iso.sh             #   bakes everything into one bootable ISO
-├── scripts/                     # Operator helpers (deploy, lock-down, verify, teardown)
+├── scripts/                     # Operator helpers
+│   ├── build-iso-wizard.sh      #   interactive wizard — START HERE
+│   ├── bootstrap-ludus.sh       #   install Ludus on a fresh Proxmox host
+│   ├── deploy-range.sh          #   render range config + ludus range deploy
+│   ├── install-monitoring.sh    #   Splunk users + Elastic stack
+│   ├── lock-down.sh             #   cut off lab egress except Tailscale
+│   ├── verify-isolation.sh      #   prove the lockdown actually holds
+│   └── teardown.sh              #   destroy the range + deregister Tailscale
 └── docs/                        # Detailed per-topic runbooks
 ```
 
-## Two ways to use it
+## Alternative: manual, step-by-step (if you already have Proxmox)
 
-### Path 1 — Fully unattended (recommended)
-
-Burn one USB, boot one box, walk away. ~3 hours later you have a fully
-running, isolated lab.
-
-```bash
-# On your laptop
-cp ludus/.env.example .env
-$EDITOR .env                                          # fill in every field
-sudo apt install proxmox-auto-install-assistant gettext-base
-./iso/build-iso.sh
-sudo dd if=iso/build/attackrangelocal-*.iso of=/dev/sdX bs=4M status=progress
-# Boot target box from USB. Done.
-```
-
-Full details: [`docs/unattended-iso.md`](docs/unattended-iso.md).
-
-### Path 2 — Manual, step-by-step (if you already have Proxmox)
+Skip the ISO entirely if your Proxmox VE is already installed and you
+just want to deploy the range on it:
 
 ```bash
 # On your laptop, render .env
@@ -95,8 +130,8 @@ ssh root@proxmox
 cd /opt/attackrangelocal
 scripts/bootstrap-ludus.sh         # installs Ludus
 scripts/install-roles.sh           # roles + templates (~75 min)
-scripts/deploy-range.sh            # deploys all 7 VMs  (~45 min)
-scripts/install-monitoring.sh      # Elastic stack + Splunk users
+scripts/deploy-range.sh            # deploys 5 or 7 VMs depending on RANGE_MODE
+scripts/install-monitoring.sh      # Splunk users (+ Elastic stack if RANGE_MODE=full)
 scripts/install-extended-attacks.sh # APT Simulator, CALDERA, defused samples (optional)
 scripts/lock-down.sh               # cuts off internet egress
 scripts/start-continuous-sim.sh    # kicks off Atomic Runner on win-client1
@@ -112,10 +147,17 @@ scripts/start-attack-range.sh      # docker compose up (UI on :4321, API :4000)
 
 ## Hardware
 
-- x86_64 host, Passmark > 6,000
-- **≥ 30 GB RAM**, **≥ 16 threads** (whole-system ceiling — fits 32 GB / 16-core boxes)
-- **≥ 500 GB SSD**
-- **Wired** internet (during bootstrap only)
+Two presets, picked by `RANGE_MODE` in `.env` (the wizard prompts you):
+
+| Mode | RAM | Threads | SSD | What you get |
+|---|---:|---:|---:|---|
+| `minimal` | **16 GB** | **12** | **256 GB** | 5 VMs: DC+server, win client, splunk, linux, kali. Splunk only — no Elastic. |
+| `full` (default) | **30 GB** | **16** | **500 GB** | 7 VMs: DC, 2 win members, splunk, **elastic**, linux, kali. Both SIEMs. |
+
+Either way: x86_64 host (Passmark > 6,000), wired internet during the
+~90-min bootstrap window only.
+
+Full-mode footprint (lab 22 GB / 12 vCPU + Proxmox + router):
 
 Footprint (lab 22 GB / 12 vCPU + Proxmox + router):
 
@@ -151,7 +193,7 @@ Drop `winsrv1` from the range config (-2 GB / -1 vCPU) if you need to fit a smal
 ## Teardown
 
 ```bash
-ssh root@ludus-host
+ssh root@ludus-attackrangelocal
 cd /opt/attackrangelocal
 scripts/teardown.sh --confirm
 ```
@@ -168,6 +210,7 @@ Cleanly deregisters Tailscale devices, then destroys the VMs in Proxmox.
 - [`docs/continuous-simulation.md`](docs/continuous-simulation.md) — Atomic Runner schedule, both loop paths
 - [`docs/extended-attacks.md`](docs/extended-attacks.md) — APT Simulator, PurpleSharp, CALDERA, defused malware samples
 - [`docs/monitoring.md`](docs/monitoring.md) — Splunk + Elastic side-by-side, multi-user setup
+- [`docs/minimal-mode.md`](docs/minimal-mode.md) — 16 GB / 256 GB topology, what's dropped vs full
 - [`docs/ui.md`](docs/ui.md) — replacement web UI tour + dev loop
 
 ## Credits
