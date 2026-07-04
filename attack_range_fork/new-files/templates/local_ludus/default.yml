@@ -3,36 +3,52 @@
 # Mirrors the AWS "default" template structure so the existing controller
 # logic (which iterates the `attack_range:` host list and applies Galaxy
 # roles) works unchanged. The actual VM creation is done by Ludus — Attack
-# Range only needs this so its UI/API can enumerate "what's in the range".
+# Range only needs this so simulate()/the API can validate targets.
+#
+# Field names below (general.cloud_provider, attack_range[].name) MUST match
+# what attack_range/attack_range_controller.py and
+# attack_range/managers/ansible_manager.py actually read -- verified against
+# splunk/attack_range v5.0.0. `attack_range_id` is a fixed string (not a
+# generated UUID): local_ludus is a persistent lab, not a disposable cloud
+# stack, and attack_range_fork/apply-patches.py's PATCH:local_ludus-fixed-id
+# keeps `build` idempotent against this same ID every time it's re-run.
 
 general:
-  provider: local_ludus
+  cloud_provider: local_ludus
+  attack_range_id: local-ludus-range
   attack_range_name: attackrangelocal
+  attack_range_password: not_used_ludus_manages_credentials
   key_name: not_used
   start_date: not_used
   cleanup: false
   splunk_admin_password: changeme123!
   attack_data_repo: https://github.com/splunk/attack_data
 
-# This stanza is informational only when provider == local_ludus. It tells
-# the web UI which hosts to expect. IPs are MagicDNS hostnames; the patched
-# ansible_manager reads /inventory.yml for real connection details.
+# `name` must match the top-level Ansible inventory group synthesized by
+# ansible/inventory.yml.j2 for that host (a singleton group holding the
+# real Tailscale MagicDNS hostname) -- that's what simulate(target=...)
+# is matched and dispatched against. `windows`/`linux` flags are informational
+# (drive credential-type display in the API); real connection details always
+# come from /inventory.yml, injected by PATCH:local_ludus-static-inventory.
 attack_range:
-  - hostname: dc01
+  - name: dc01
     role: ar_domain_controller
-    ip_address: dc01           # MagicDNS resolves
-  - hostname: winclient1
+    windows: true
+  - name: winclient1
     role: ar_domain_join
-    ip_address: winclient1
-  - hostname: winsrv1
+    windows: true
+  - name: winsrv1
     role: ar_domain_join
-    ip_address: winsrv1
-  - hostname: splunk
+    windows: true
+  - name: splunk
     role: ar_splunk
-    ip_address: splunk
-  - hostname: linux
+    linux: true
+  - name: elastic
+    role: ar_elastic
+    linux: true
+  - name: linux
     role: ar_linux
-    ip_address: linux
-  - hostname: kali
+    linux: true
+  - name: kali
     role: ar_kali
-    ip_address: kali
+    linux: true

@@ -113,7 +113,7 @@
         content: |
           # Pulls + installs the Sandcat agent from the CALDERA server
           # running on the kali box (port 8888).
-          param([string]$server = "http://{{ range_id }}-kali:8888")
+          param([string]$server = "http://{{ range_id | default(lookup('env','RANGE_ID')) }}-kali:8888")
           $url   = "$server/file/download"
           $hdrs  = @{ "file" = "sandcat.go"; "platform" = "windows" }
           $agent = "{{ tools_dir }}\caldera\sandcat.exe"

@@ -79,11 +79,23 @@ scripts/start-continuous-sim.sh --laptop
 Which under the hood runs:
 
 ```bash
-docker compose exec attack_range python attack_range.py simulate \
-  --target ${RANGE_ID}-winclient1 \
+docker compose \
+  -f attack_range_fork/upstream/docker/docker-compose.yml \
+  -f docker/attack-range.compose.yml \
+  --profile cli run --rm attack_range \
+  python attack_range.py simulate \
+  --target winclient1 --techniques T1082 \
   --random --loop --interval 30 \
   --exclude T1485,T1486,T1490,T1491,T1561,T1565,T1529
 ```
+
+`--target` is the bare role name from `templates/local_ludus/default.yml`'s
+`attack_range:` list (`winclient1`, not `${RANGE_ID}-winclient1`) — that's
+what `AttackRangeController.simulate()` matches against, and what the
+per-host singleton group in `ansible/inventory.yml.j2` is named.
+`--techniques` is required by argparse even with `--random` set (its value
+is ignored — `--random` overrides it with a technique picked from the
+Atomic Red Team indexes).
 
 Pros: easier to retarget, easier to tweak the exclude list, controlled
 from your laptop. Cons: stops when your laptop sleeps or loses Tailscale.
@@ -94,8 +106,12 @@ Atomic Runner provides the always-on baseline. Drop into the laptop loop
 when you want to push a specific technique cluster manually:
 
 ```bash
-docker compose exec attack_range python attack_range.py simulate \
-  --target ${RANGE_ID}-winclient1 \
+docker compose \
+  -f attack_range_fork/upstream/docker/docker-compose.yml \
+  -f docker/attack-range.compose.yml \
+  --profile cli run --rm attack_range \
+  python attack_range.py simulate \
+  --target winclient1 \
   --techniques T1003.001,T1059.001,T1003.006
 ```
 

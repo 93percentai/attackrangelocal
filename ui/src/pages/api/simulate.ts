@@ -10,10 +10,6 @@ export const POST: APIRoute = async ({ request }) => {
   const result = await triggerSimulate({
     target: body.target,
     techniques: body.techniques ?? "",
-    random: !!body.random,
-    loop: !!body.loop,
-    interval: body.interval ?? 30,
-    exclude: body.exclude ?? "",
   });
   return new Response(result.detail, { status: result.ok ? 200 : 502 });
 };

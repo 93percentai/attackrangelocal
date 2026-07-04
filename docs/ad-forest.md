@@ -8,8 +8,8 @@ is defined entirely by `domain:` blocks in `ludus/range-config.yml.j2`.
 | Host | OS | `domain.role` | Notes |
 |---|---|---|---|
 | `dc01` | Win Server 2022 | `primary-dc` | Holds all FSMO roles, AD DNS |
-| `win-client1` | Win 11 Enterprise | `member` | Domain-joined, attack target |
-| `win-srv1` | Win Server 2022 | `member` | Domain-joined, file/IIS server |
+| `winclient1` | Win 11 Enterprise | `member` | Domain-joined, attack target |
+| `winsrv1` | Win Server 2022 | `member` | Domain-joined, file/IIS server |
 
 Forest root domain: `range.local` (override via `AD_DOMAIN_FQDN` in `.env`).
 
