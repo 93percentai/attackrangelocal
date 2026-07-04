@@ -22,11 +22,23 @@ set -a; source "${REPO_ROOT}/.env"; set +a
 source "${REPO_ROOT}/scripts/lib/render-inventory.sh"
 render_inventory
 
+COMPOSE_FILES=(
+  -f "${FORK_DIR}/docker/docker-compose.yml"
+  -f "${REPO_ROOT}/docker/attack-range.compose.yml"
+)
+
 cd "${REPO_ROOT}"
-docker compose \
-  -f "${FORK_DIR}/docker/docker-compose.yml" \
-  -f "${REPO_ROOT}/docker/attack-range.compose.yml" \
-  up -d
+docker compose "${COMPOSE_FILES[@]}" up -d
+
+# Seed config/local-ludus-range.yml with general.status: running. Without
+# this, /attack-range/simulate 404s with "attack range not found" forever --
+# local_ludus never goes through the normal Terraform build flow that would
+# otherwise create this file, since Ludus already provisioned the VMs.
+# Idempotent: attack_range_fork's local_ludus patches reuse the same fixed
+# attack_range_id (local-ludus-range) every time, so re-running this is safe.
+echo "Registering the range with the Attack Range API (attack_range_id: local-ludus-range)..."
+docker compose "${COMPOSE_FILES[@]}" --profile cli run --rm attack_range \
+  build --template local_ludus/default.yml
 
 echo "Attack Range web UI:  http://localhost:4321"
 echo "Attack Range API:     http://localhost:4000  (swagger at /openapi/swagger)"
