@@ -10,6 +10,10 @@ const exec = promisify(execCb);
 
 const ATTACK_RANGE_API =
   process.env.ATTACK_RANGE_API ?? "http://127.0.0.1:4000";
+// Fixed attack_range_id baked into templates/local_ludus/default.yml —
+// local_ludus is a persistent lab (Ludus owns the VMs), not a disposable
+// cloud stack, so there's no per-build UUID to discover at runtime.
+const ATTACK_RANGE_ID = process.env.ATTACK_RANGE_ID ?? "local-ludus-range";
 const RANGE_ID = process.env.RANGE_ID ?? "42";
 const STATUS_FILE =
   process.env.STATUS_FILE ?? "/var/lib/ludus-bootstrap/status";
@@ -119,24 +123,30 @@ export async function getVmStatuses(): Promise<VmStatus[]> {
   });
 }
 
+// Single-shot "Run once" trigger. Hits the real upstream Attack Range API
+// route (POST /attack-range/simulate) with the schema it actually expects
+// (SimulateRequest: attack_range_id, target, techniques[]) — the API has no
+// loop/random/interval/exclude concept; that's CLI-only
+// (attack_range.py simulate --loop, driven by scripts/start-continuous-sim.sh
+// --laptop) or the separate Atomic Runner Windows-service path (--windows).
 export async function triggerSimulate(opts: {
   target: string;
   techniques?: string;
-  random?: boolean;
-  loop?: boolean;
-  interval?: number;
-  exclude?: string;
 }): Promise<{ ok: boolean; detail: string }> {
+  const techniques = (opts.techniques ?? "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (techniques.length === 0) {
+    return { ok: false, detail: "No techniques specified." };
+  }
   const body = {
+    attack_range_id: ATTACK_RANGE_ID,
     target: opts.target,
-    techniques: opts.techniques ?? "",
-    random: !!opts.random,
-    loop: !!opts.loop,
-    interval: opts.interval ?? 30,
-    exclude: opts.exclude ?? "",
+    techniques,
   };
   try {
-    const r = await fetch(`${ATTACK_RANGE_API}/simulate`, {
+    const r = await fetch(`${ATTACK_RANGE_API}/attack-range/simulate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
