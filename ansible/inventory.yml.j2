@@ -4,63 +4,84 @@
 # This file replaces the Terraform-generated inventory that upstream Attack
 # Range builds from cloud API outputs. Patch 3 in attack_range_fork makes
 # the controller load /inventory.yml verbatim when provider == local_ludus.
+#
+# Layout note: groups are declared FLAT at the top level (not nested under
+# `all: children:`). This is equally valid Ansible inventory syntax (every
+# top-level group is implicitly a child of `all`), but it also matters for
+# correctness here: AttackRangeController.simulate() does its own raw
+# `yaml.safe_load()` of this file and looks up `inventory[target]['hosts']`
+# as a TOP-LEVEL key — it does not walk `all.children`. Each per-role group
+# below (dc01, winclient1, ...) is a singleton containing exactly the one
+# Tailscale-named host for that role, so `simulate --target winclient1`
+# resolves correctly. Hosts also belong to the OS-level groups (windows,
+# splunk, linux, kali) purely so ansible-runner picks up the right
+# connection vars — a host inherits vars from every group it's a member of.
 
 all:
   vars:
     ansible_user: "${AD_DOMAIN_ADMIN}"
     ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null'
 
-  children:
+windows:
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+    ansible_port: 5986
+    ansible_winrm_scheme: https
+    ansible_password: "${AD_PASSWORD}"
+  hosts:
+    ${RANGE_ID}-dc01:
+      attack_range_role: dc
+      fqdn: "${RANGE_ID}-DC01.${AD_DOMAIN_FQDN}"
+    ${RANGE_ID}-winclient1:
+      attack_range_role: client
+      fqdn: "${RANGE_ID}-WINCLIENT1.${AD_DOMAIN_FQDN}"
+    ${RANGE_ID}-winsrv1:
+      attack_range_role: server
+      fqdn: "${RANGE_ID}-WINSRV1.${AD_DOMAIN_FQDN}"
 
-    windows:
-      vars:
-        ansible_connection: winrm
-        ansible_winrm_transport: ntlm
-        ansible_winrm_server_cert_validation: ignore
-        ansible_port: 5986
-        ansible_winrm_scheme: https
-        ansible_password: "${AD_PASSWORD}"
-      hosts:
-        ${RANGE_ID}-dc01:
-          attack_range_role: dc
-          fqdn: "${RANGE_ID}-DC01.${AD_DOMAIN_FQDN}"
-        ${RANGE_ID}-winclient1:
-          attack_range_role: client
-          fqdn: "${RANGE_ID}-WINCLIENT1.${AD_DOMAIN_FQDN}"
-        ${RANGE_ID}-winsrv1:
-          attack_range_role: server
-          fqdn: "${RANGE_ID}-WINSRV1.${AD_DOMAIN_FQDN}"
+splunk:
+  vars:
+    ansible_connection: ssh
+    ansible_user: ubuntu
+  hosts:
+    ${RANGE_ID}-splunk:
+      splunk_admin_password: changeme123!
 
-    splunk:
-      vars:
-        ansible_connection: ssh
-        ansible_user: ubuntu
-      hosts:
-        ${RANGE_ID}-splunk:
-          splunk_admin_password: changeme123!
+elastic:
+  vars:
+    ansible_connection: ssh
+    ansible_user: ubuntu
+  hosts:
+    ${RANGE_ID}-elastic:
+      kibana_port: 5601
+      elasticsearch_port: 9200
+      fleet_port: 8220
 
-    elastic:
-      vars:
-        ansible_connection: ssh
-        ansible_user: ubuntu
-      hosts:
-        ${RANGE_ID}-elastic:
-          kibana_port: 5601
-          elasticsearch_port: 9200
-          fleet_port: 8220
+linux:
+  vars:
+    ansible_connection: ssh
+    ansible_user: ubuntu
+  hosts:
+    ${RANGE_ID}-linux:
+      attack_range_role: victim
 
-    linux:
-      vars:
-        ansible_connection: ssh
-        ansible_user: ubuntu
-      hosts:
-        ${RANGE_ID}-linux:
-          attack_range_role: victim
+kali:
+  vars:
+    ansible_connection: ssh
+    ansible_user: kali
+  hosts:
+    ${RANGE_ID}-kali:
+      attack_range_role: attacker
 
-    kali:
-      vars:
-        ansible_connection: ssh
-        ansible_user: kali
-      hosts:
-        ${RANGE_ID}-kali:
-          attack_range_role: attacker
+# ----- Per-host singleton groups (Attack Range simulate() targets) --------
+dc01:
+  hosts:
+    ${RANGE_ID}-dc01: {}
+winclient1:
+  hosts:
+    ${RANGE_ID}-winclient1: {}
+winsrv1:
+  hosts:
+    ${RANGE_ID}-winsrv1: {}
