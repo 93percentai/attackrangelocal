@@ -19,9 +19,20 @@ case "$MODE" in
   --laptop)
     : "${SIM_INTERVAL_MINUTES:=30}"
     : "${SIM_EXCLUDE:=T1485,T1486,T1490,T1491,T1561,T1565,T1529}"
+    FORK_DIR="${REPO_ROOT}/attack_range_fork/upstream"
+    if [[ ! -d "$FORK_DIR" ]]; then
+      echo "Attack Range fork not present. Run: attack_range_fork/bootstrap.sh" >&2
+      exit 1
+    fi
+    source "${REPO_ROOT}/scripts/lib/render-inventory.sh"
+    render_inventory
+    COMPOSE_FILES=(
+      -f "${FORK_DIR}/docker/docker-compose.yml"
+      -f "${REPO_ROOT}/docker/attack-range.compose.yml"
+    )
     echo "Starting laptop-side continuous loop (interval ${SIM_INTERVAL_MINUTES}m, exclude ${SIM_EXCLUDE})"
-    docker compose -f "${REPO_ROOT}/docker/attack-range.compose.yml" \
-      exec attack_range python attack_range.py simulate \
+    docker compose "${COMPOSE_FILES[@]}" --profile cli run --rm attack_range \
+      python attack_range.py simulate \
         --target winclient1 \
         --techniques T1082 \
         --random \

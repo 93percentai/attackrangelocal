@@ -107,7 +107,10 @@ export async function getVmStatuses(): Promise<VmStatus[]> {
   return VM_INVENTORY.map((vm) => {
     const fqdn = `${RANGE_ID}-${vm.name}`;
     const ts = peers[fqdn] ?? peers[fqdn.toLowerCase()];
-    const px = [...proxmoxByName.entries()].find(([k]) => k.includes(vm.name));
+    const px = [...proxmoxByName.entries()].find(([k]) => {
+      const normalizeVmName = (value: string) => value.replace(/-/g, "").toLowerCase();
+      return normalizeVmName(k).includes(normalizeVmName(vm.name));
+    });
     return {
       name: vm.name,
       fqdn,

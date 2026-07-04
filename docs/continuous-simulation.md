@@ -79,7 +79,11 @@ scripts/start-continuous-sim.sh --laptop
 Which under the hood runs:
 
 ```bash
-docker compose exec attack_range python attack_range.py simulate \
+docker compose \
+  -f attack_range_fork/upstream/docker/docker-compose.yml \
+  -f docker/attack-range.compose.yml \
+  --profile cli run --rm attack_range \
+  python attack_range.py simulate \
   --target winclient1 --techniques T1082 \
   --random --loop --interval 30 \
   --exclude T1485,T1486,T1490,T1491,T1561,T1565,T1529
@@ -102,7 +106,11 @@ Atomic Runner provides the always-on baseline. Drop into the laptop loop
 when you want to push a specific technique cluster manually:
 
 ```bash
-docker compose exec attack_range python attack_range.py simulate \
+docker compose \
+  -f attack_range_fork/upstream/docker/docker-compose.yml \
+  -f docker/attack-range.compose.yml \
+  --profile cli run --rm attack_range \
+  python attack_range.py simulate \
   --target winclient1 \
   --techniques T1003.001,T1059.001,T1003.006
 ```
