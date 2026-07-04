@@ -1,26 +1,42 @@
 #!/usr/bin/env python3
 """
 String-based patcher that adds the `local_ludus` provider hooks to a fresh
-checkout of splunk/attack_range. Robust against minor line-number drift
-because it matches on function definitions and code patterns, not line numbers.
+checkout of splunk/attack_range. Matches on exact (but minimal) code
+fragments taken from the pinned ATTACK_RANGE_REF tag, so a `WARN: literal
+text not found` means upstream has drifted and the anchor below needs to be
+updated to match the new source (see docs/attack-range-patches.md).
 
 Usage:
     python3 apply-patches.py <path-to-upstream-clone>
 
-Patches applied (idempotent — safe to re-run):
+Patches applied (idempotent -- safe to re-run):
 
-  Patch 1   Register `local_ludus` as a valid provider in the CLI and the
-            AttackRangeController constructor (alongside aws/azure/gcp).
+  Patch 1   Register `local_ludus` as a valid provider: extend the
+            AttackRangeController's cloud_provider allow-list, wire up
+            _init_cloud_provider()/_setup_directories() to recognise it.
 
-  Patch 2   In managers/ansible_manager.py, gate every WireGuard-related
-            method behind `if self.provider != "local_ludus"`.
+  Patch 2   Short-circuit AttackRangeController.build() and .destroy() for
+            local_ludus: Ludus already created and destroys the VMs, so
+            there is no Terraform/WireGuard phase to run. build() copies the
+            static inventory and marks general.status = "running" directly;
+            destroy() just removes the config file.
 
   Patch 3   In managers/ansible_manager.py::update_inventory_attack_range_servers,
-            short-circuit to read /inventory.yml when provider == local_ludus.
+            short-circuit to read /inventory.yml when provider == local_ludus,
+            instead of synthesizing AWS-shaped (10.0.2.x / SSH-key) entries
+            from the `attack_range:` config list.
 
   Patch 4   In attack_range.py, add --loop / --interval / --random / --exclude
-            to the simulate subparser. In attack_range_controller.py::simulate,
-            wrap the body in a while loop driven by those flags.
+            to the simulate subparser and forward them into
+            AttackRangeController.simulate(). In attack_range_controller.py,
+            wrap the existing simulate() body (renamed to _simulate_inner) in
+            a loop driven by those flags, with random-technique selection
+            pulled from the Atomic Red Team Indexes CSVs.
+
+  Patch 5   In attack_range.py build_action(), reuse the fixed
+            attack_range_id baked into templates/local_ludus/default.yml
+            instead of minting a new UUID on every `build` call -- local_ludus
+            is a persistent lab, not a disposable cloud stack.
 
 The companion `new-files/` tree copies in:
   - attack_range/cloud_providers/local_ludus_provider.py
@@ -33,7 +49,7 @@ import sys
 from pathlib import Path
 
 
-def patch(file: Path, anchor: str, insert: str, marker: str) -> None:
+def insert_after(file: Path, anchor: str, insert: str, marker: str) -> None:
     """Insert `insert` immediately after the first occurrence of `anchor`.
     Skips if `marker` already present in the file (idempotent)."""
     text = file.read_text()
@@ -41,10 +57,25 @@ def patch(file: Path, anchor: str, insert: str, marker: str) -> None:
         print(f"  SKIP  {file.name} (marker {marker!r} already present)")
         return
     if anchor not in text:
-        print(f"  WARN  {file.name}: anchor not found: {anchor!r}")
+        print(f"  WARN  {file.name}: anchor not found for {marker!r}")
         return
     new = text.replace(anchor, anchor + insert, 1)
     file.write_text(new)
+    print(f"  OK    {file.name}: applied {marker}")
+
+
+def replace_literal(file: Path, old: str, new: str, marker: str) -> None:
+    """Replace the first occurrence of the exact substring `old` with `new`.
+    Skips if `marker` already present in the file (idempotent)."""
+    text = file.read_text()
+    if marker in text:
+        print(f"  SKIP  {file.name} ({marker} already present)")
+        return
+    if old not in text:
+        print(f"  WARN  {file.name}: literal text not found for {marker!r}")
+        return
+    text = text.replace(old, new, 1)
+    file.write_text(text)
     print(f"  OK    {file.name}: applied {marker}")
 
 
@@ -55,7 +86,7 @@ def regex_patch(file: Path, pattern: str, replacement: str, marker: str) -> None
         return
     new, n = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE | re.DOTALL)
     if n == 0:
-        print(f"  WARN  {file.name}: pattern not matched")
+        print(f"  WARN  {file.name}: pattern not matched for {marker!r}")
         return
     file.write_text(new)
     print(f"  OK    {file.name}: applied {marker}")
@@ -77,91 +108,130 @@ def main() -> int:
 
     print(f"Patching {upstream} ...")
 
-    # ---- Patch 1: register local_ludus as a valid CLI provider ----
-    # Most v5 builds use argparse with choices=["aws","azure","gcp"]. We
-    # rewrite that list to include local_ludus. Marker is the string
-    # "local_ludus" itself; if it's already present we skip.
-    if cli.exists():
-        regex_patch(
-            cli,
-            r'choices\s*=\s*\["aws",\s*"azure",\s*"gcp"\]',
-            'choices=["aws", "azure", "gcp", "local_ludus"]',
-            '"local_ludus"',
-        )
-
-    # ---- Patch 1b: wire the controller's provider dispatcher ----
-    # Add a branch that instantiates LocalLudusProvider. We capture the
-    # leading whitespace of the gcp elif so the new elif matches the
-    # surrounding indentation level (varies by Attack Range version).
+    # ================================================================
+    # Patch 1: register local_ludus as a valid provider
+    # ================================================================
     if controller.exists():
-        regex_patch(
+        replace_literal(
             controller,
-            r'^(?P<indent>[ \t]*)elif self\.config\["general"\]\["provider"\] == "gcp":[^\n]*\n'
-            r'(?P<body>(?:\1[ \t]+[^\n]*\n)+)',
-            r'\g<0>'
-            r'\g<indent>elif self.config["general"]["provider"] == "local_ludus":'
-            r'  # PATCH:local_ludus-controller\n'
-            r'\g<indent>    from attack_range.cloud_providers.local_ludus_provider import LocalLudusProvider\n'
-            r'\g<indent>    self.provider = LocalLudusProvider(self.config, self.log)\n',
-            "PATCH:local_ludus-controller",
+            'if self.cloud_provider_name not in ["aws", "azure", "gcp"]:',
+            'if self.cloud_provider_name not in ["aws", "azure", "gcp", "local_ludus"]:  # PATCH:local_ludus-provider-allowlist',
+            "PATCH:local_ludus-provider-allowlist",
         )
 
-        # ---- Patch 2 + 2b: stub VPN phases when provider is local_ludus ----
-        regex_patch(
+        replace_literal(
             controller,
-            r'(?P<sig>^(?P<indent>[ \t]*)def\s+build_vpn_phase\s*\(self[^)]*\):\s*\n)',
-            r'\g<sig>'
-            r'\g<indent>    if self.config["general"]["provider"] == "local_ludus":\n'
-            r'\g<indent>        return  # PATCH:local_ludus-vpn-build\n',
-            "PATCH:local_ludus-vpn-build",
-        )
-        regex_patch(
-            controller,
-            r'(?P<sig>^(?P<indent>[ \t]*)def\s+prompt_vpn_connection\s*\(self[^)]*\):\s*\n)',
-            r'\g<sig>'
-            r'\g<indent>    if self.config["general"]["provider"] == "local_ludus":\n'
-            r'\g<indent>        return  # PATCH:local_ludus-vpn-prompt\n',
-            "PATCH:local_ludus-vpn-prompt",
+            '        elif self.cloud_provider_name == "gcp":\n'
+            '            self.terraform_dir = os.path.join(os.path.dirname(__file__), "../terraform/gcp")\n'
+            '        else:  # aws\n',
+            '        elif self.cloud_provider_name == "gcp":\n'
+            '            self.terraform_dir = os.path.join(os.path.dirname(__file__), "../terraform/gcp")\n'
+            '        elif self.cloud_provider_name == "local_ludus":\n'
+            '            # PATCH:local_ludus-terraform-dir -- unused: local_ludus never calls terraform_manager.\n'
+            '            self.terraform_dir = os.path.join(os.path.dirname(__file__), "../terraform/aws")\n'
+            '        else:  # aws\n',
+            "PATCH:local_ludus-terraform-dir",
         )
 
-    # ---- Patch 2c: gate WireGuard helpers in ansible_manager ----
+        replace_literal(
+            controller,
+            '        elif self.cloud_provider_name == "gcp":\n'
+            '            self.cloud_provider = GCPProvider(self.config, self.logger)\n'
+            '        else:  # aws\n'
+            '            self.cloud_provider = AWSProvider(self.config, self.logger)\n',
+            '        elif self.cloud_provider_name == "gcp":\n'
+            '            self.cloud_provider = GCPProvider(self.config, self.logger)\n'
+            '        elif self.cloud_provider_name == "local_ludus":\n'
+            '            # PATCH:local_ludus-provider-init\n'
+            '            from .cloud_providers.local_ludus_provider import LocalLudusProvider\n'
+            '            self.cloud_provider = LocalLudusProvider(self.config, self.logger)\n'
+            '        else:  # aws\n'
+            '            self.cloud_provider = AWSProvider(self.config, self.logger)\n',
+            "PATCH:local_ludus-provider-init",
+        )
+
+    # ================================================================
+    # Patch 2: short-circuit build() and destroy() for local_ludus --
+    # Ludus already owns VM lifecycle, there is no Terraform/VPN phase.
+    # ================================================================
+    if controller.exists():
+        replace_literal(
+            controller,
+            '        # Update terraform variables with the updated config (including attack_range_id)\n'
+            '        self.terraform_manager.update_variables()\n',
+            '        # PATCH:local_ludus-build-shortcircuit -- Ludus already provisioned\n'
+            '        # the VMs (see scripts/deploy-range.sh); there is no Terraform/VPN\n'
+            '        # phase to run here. Persist the config and mark the range running\n'
+            '        # so simulate()/the API work immediately.\n'
+            '        if self.cloud_provider_name == "local_ludus":\n'
+            '            self.config_manager.save_config_to_attack_range(attack_range_id)\n'
+            '            self.ansible_manager.update_inventory_attack_range_servers()\n'
+            '            self.config_manager.update_status("running")\n'
+            '            self.logger.info("local_ludus: VMs already provisioned by Ludus; marked attack range as running.")\n'
+            '            self.logger.info(f"Attack Range ID: {attack_range_id}")\n'
+            '            return\n\n'
+            '        # Update terraform variables with the updated config (including attack_range_id)\n'
+            '        self.terraform_manager.update_variables()\n',
+            "PATCH:local_ludus-build-shortcircuit",
+        )
+
+        replace_literal(
+            controller,
+            '        self.logger.info("[action] > destroy\\n")\n\n'
+            '        # Setup remote backend (S3/Azure Storage/GCS) if needed\n'
+            '        self.backend_manager.setup_remote_backend()\n',
+            '        self.logger.info("[action] > destroy\\n")\n\n'
+            '        # PATCH:local_ludus-destroy-shortcircuit -- no Terraform infra to\n'
+            '        # tear down; use scripts/teardown.sh to remove the Ludus VMs.\n'
+            '        if self.cloud_provider_name == "local_ludus":\n'
+            '            self.logger.info("local_ludus: nothing to destroy via Terraform. Run scripts/teardown.sh to remove the Ludus range.")\n'
+            '            if self.config_path:\n'
+            '                self.config_manager.remove_config()\n'
+            '            return\n\n'
+            '        # Setup remote backend (S3/Azure Storage/GCS) if needed\n'
+            '        self.backend_manager.setup_remote_backend()\n',
+            "PATCH:local_ludus-destroy-shortcircuit",
+        )
+
+    # ================================================================
+    # Patch 3: static inventory injection (ansible_manager.py)
+    # ================================================================
     if ansible_mgr.exists():
-        for fn in (
-            "update_vpn_playbook",
-            "update_vpn_config_playbook",
-            "_patch_wireguard_allowed_ips",
-            "_patch_wireguard_server_config",
-        ):
-            marker = f"PATCH:local_ludus-wg-gate-{fn}"
-            regex_patch(
-                ansible_mgr,
-                rf'(?P<sig>^(?P<indent>[ \t]*)def\s+{fn}\s*\(self[^)]*\):\s*\n)',
-                r'\g<sig>'
-                r'\g<indent>    if getattr(self, "provider", None) == "local_ludus":\n'
-                rf'\g<indent>        return  # {marker}\n',
-                marker,
-            )
-
-        # ---- Patch 3: static inventory injection ----
-        regex_patch(
+        insert_after(
             ansible_mgr,
-            r'(?P<sig>^(?P<indent>[ \t]*)def\s+update_inventory_attack_range_servers\s*\(self[^)]*\):\s*\n)',
-            r'\g<sig>'
-            r'\g<indent>    # PATCH:local_ludus-static-inventory\n'
-            r'\g<indent>    if getattr(self, "provider", None) == "local_ludus":\n'
-            r'\g<indent>        import shutil, os\n'
-            r'\g<indent>        src = "/inventory.yml"\n'
-            r'\g<indent>        if os.path.exists(src):\n'
-            r'\g<indent>            shutil.copy(src, self.inventory_path)\n'
-            r'\g<indent>            self.log.info(f"local_ludus: copied static inventory from {src}")\n'
-            r'\g<indent>            return\n',
+            "import json\nimport os\n",
+            "import shutil  # PATCH:local_ludus-imports\n",
+            "PATCH:local_ludus-imports",
+        )
+
+        replace_literal(
+            ansible_mgr,
+            '        self.logger.info("Updating inventory with attack_range servers from config...")\n\n'
+            '        inventory = self._load_inventory()\n',
+            '        self.logger.info("Updating inventory with attack_range servers from config...")\n\n'
+            '        # PATCH:local_ludus-static-inventory -- Ludus already generated a\n'
+            '        # complete, working inventory (Tailscale MagicDNS hostnames, correct\n'
+            '        # per-OS connection vars). Copy it verbatim instead of synthesizing\n'
+            '        # AWS-style 10.0.2.x entries from the attack_range: config list.\n'
+            '        if self.cloud_provider == "local_ludus":\n'
+            '            src = "/inventory.yml"\n'
+            '            if os.path.exists(src):\n'
+            '                shutil.copy(src, self.inventory_path)\n'
+            '                self.logger.info(f"local_ludus: copied static inventory from {src}")\n'
+            '                return\n'
+            '            self.logger.warning(f"local_ludus: {src} not found; leaving inventory untouched")\n'
+            '            return\n\n'
+            '        inventory = self._load_inventory()\n',
             "PATCH:local_ludus-static-inventory",
         )
 
-    # ---- Patch 4: simulate --loop / --random / --interval / --exclude ----
+    # ================================================================
+    # Patch 4: simulate --loop / --random / --interval / --exclude
+    # ================================================================
     if cli.exists():
-        # Add flags to the simulate subparser. We look for the line that
-        # creates --techniques and append our four new arguments after it.
+        # 4a. Add flags to the simulate subparser (anchor: the --techniques
+        # argument definition, which ends right before share_parser.set_defaults
+        # would be added elsewhere -- anchor on the closing paren + newline).
         regex_patch(
             cli,
             r'(simulate_parser\.add_argument\(\s*"-te",\s*"--techniques".*?\)\s*\n)',
@@ -177,54 +247,90 @@ def main() -> int:
             "PATCH:local_ludus-simulate-flags",
         )
 
-        # Forward the new args to controller.simulate(). Match the existing
-        # simulate dispatch line and replace it with a loop-aware call.
-        regex_patch(
+        # 4b. Forward the new args to controller.simulate().
+        replace_literal(
             cli,
-            r'controller\.simulate\(\s*args\.target\s*,\s*args\.techniques\s*\)',
-            'controller.simulate(args.target, args.techniques, '
-            'loop=getattr(args, "loop", False), '
-            'random_pick=getattr(args, "random", False), '
-            'interval_minutes=getattr(args, "interval", 30), '
-            'exclude=getattr(args, "exclude", ""))  # PATCH:local_ludus-simulate-dispatch',
+            "    controller.simulate(args.target, techniques)\n",
+            "    controller.simulate(args.target, techniques, "
+            "loop=getattr(args, \"loop\", False), "
+            "random_pick=getattr(args, \"random\", False), "
+            "interval_minutes=getattr(args, \"interval\", 30), "
+            "exclude=getattr(args, \"exclude\", \"\"))  # PATCH:local_ludus-simulate-dispatch\n",
             "PATCH:local_ludus-simulate-dispatch",
         )
 
+        # 4c. local_ludus is a persistent lab: reuse the fixed attack_range_id
+        # baked into the template instead of minting a new UUID on every build.
+        replace_literal(
+            cli,
+            "        # Prepare config from template (loads template, adds metadata, saves to config folder)\n"
+            "        config, config_path, attack_range_id = prepare_config_from_template(\n"
+            "            args.template,\n"
+            "            templates_dir,\n"
+            "            config_dir,\n"
+            "            generate_id=True\n"
+            "        )\n",
+            "        # Prepare config from template (loads template, adds metadata, saves to config folder)\n"
+            "        # PATCH:local_ludus-fixed-id -- local_ludus is a persistent lab (Ludus\n"
+            "        # owns the VMs); reuse the template's fixed attack_range_id instead of\n"
+            "        # minting a new UUID on every `build` invocation.\n"
+            "        try:\n"
+            "            _peek_cfg = load_config(resolve_template_path(args.template, templates_dir)) or {}\n"
+            "            _is_local_ludus = str(_peek_cfg.get(\"general\", {}).get(\"cloud_provider\", \"\")).lower() == \"local_ludus\"\n"
+            "        except Exception:\n"
+            "            _is_local_ludus = False\n"
+            "        config, config_path, attack_range_id = prepare_config_from_template(\n"
+            "            args.template,\n"
+            "            templates_dir,\n"
+            "            config_dir,\n"
+            "            generate_id=not _is_local_ludus\n"
+            "        )\n",
+            "PATCH:local_ludus-fixed-id",
+        )
+
     if controller.exists():
-        # Wrap simulate() body in a loop. We RENAME the existing
-        # `def simulate(self, target, techniques):` to `_simulate_inner`
-        # so its body becomes a callable, then prepend a wrapper method
-        # with the new signature. Indent is captured from the original
-        # def so this works regardless of class nesting.
-        regex_patch(
+        # 4d. Wrap simulate(): rename the existing method to _simulate_inner
+        # (body untouched) and add a new simulate() wrapper in front of it
+        # that understands loop/random_pick/interval_minutes/exclude.
+        replace_literal(
             controller,
-            r'^(?P<indent>[ \t]*)def\s+simulate\(self,\s*target,\s*techniques\)\s*:\s*\n',
-            r'\g<indent>def simulate(self, target, techniques, loop=False, random_pick=False, '
-            r'interval_minutes=30, exclude=""):  # PATCH:local_ludus-simulate-sig\n'
-            r'\g<indent>    import time, random, csv, glob\n'
-            r'\g<indent>    _excluded = {t.strip() for t in (exclude or "").split(",") if t.strip()}\n'
-            r'\g<indent>    def _pick():\n'
-            r'\g<indent>        paths = sorted(glob.glob("/opt/atomic-red-team/atomics/Indexes/Indexes-CSV/*.csv"))\n'
-            r'\g<indent>        techs = set()\n'
-            r'\g<indent>        for p in paths:\n'
-            r'\g<indent>            with open(p, newline="") as fh:\n'
-            r'\g<indent>                for row in csv.DictReader(fh):\n'
-            r'\g<indent>                    tid = (row.get("Technique #") or "").strip()\n'
-            r'\g<indent>                    if tid.startswith("T") and tid not in _excluded:\n'
-            r'\g<indent>                        techs.add(tid)\n'
-            r'\g<indent>        return random.choice(sorted(techs)) if techs else "T1082"\n'
-            r'\g<indent>    if not loop:\n'
-            r'\g<indent>        return self._simulate_inner(target, _pick() if random_pick else techniques)\n'
-            r'\g<indent>    self.log.info(f"simulate --loop: interval={interval_minutes}m exclude={_excluded}")\n'
-            r'\g<indent>    while True:\n'
-            r'\g<indent>        chosen = _pick() if random_pick else techniques\n'
-            r'\g<indent>        try:\n'
-            r'\g<indent>            self._simulate_inner(target, chosen)\n'
-            r'\g<indent>        except Exception as e:\n'
-            r'\g<indent>            self.log.warning(f"simulate iteration failed ({chosen}): {e}")\n'
-            r'\g<indent>        time.sleep(interval_minutes * 60)\n'
-            r'\n'
-            r'\g<indent>def _simulate_inner(self, target, techniques):  # PATCH:local_ludus-inner\n',
+            "    def simulate(self, target: str, techniques: list) -> dict:\n",
+            '    def simulate(self, target: str, techniques: list, loop: bool = False,\n'
+            '                 random_pick: bool = False, interval_minutes: int = 30,\n'
+            '                 exclude: str = "") -> dict:\n'
+            '        """\n'
+            '        [PATCH:local_ludus-simulate-sig] Run Atomic Red Team techniques against\n'
+            '        a target, optionally forever with randomly-chosen non-excluded techniques.\n'
+            '        Delegates each iteration to _simulate_inner (the original simulate() body).\n'
+            '        """\n'
+            "        if not loop:\n"
+            "            run_techniques = [self._pick_random_technique(exclude)] if random_pick else techniques\n"
+            "            return self._simulate_inner(target, run_techniques)\n\n"
+            "        excluded = {t.strip() for t in (exclude or \"\").split(\",\") if t.strip()}\n"
+            '        self.logger.info(f"simulate --loop: interval={interval_minutes}m exclude={excluded}")\n'
+            "        last_output = None\n"
+            "        while True:\n"
+            "            chosen = [self._pick_random_technique(exclude)] if random_pick else techniques\n"
+            "            try:\n"
+            "                last_output = self._simulate_inner(target, chosen)\n"
+            "            except Exception as e:\n"
+            '                self.logger.warning(f"simulate iteration failed ({chosen}): {e}")\n'
+            "            time.sleep(interval_minutes * 60)\n"
+            "        return last_output\n\n"
+            "    def _pick_random_technique(self, exclude: str = \"\") -> str:\n"
+            '        """Pick a random non-excluded technique ID from the Atomic Red Team Indexes CSVs."""\n'
+            "        import csv, glob, random\n"
+            "        excluded = {t.strip() for t in (exclude or \"\").split(\",\") if t.strip()}\n"
+            '        paths = sorted(glob.glob("/opt/atomic-red-team/atomics/Indexes/Indexes-CSV/*.csv"))\n'
+            "        techs = set()\n"
+            "        for p in paths:\n"
+            '            with open(p, newline="") as fh:\n'
+            "                for row in csv.DictReader(fh):\n"
+            '                    tid = (row.get("Technique #") or "").strip()\n'
+            '                    if tid.startswith("T") and tid not in excluded:\n'
+            "                        techs.add(tid)\n"
+            '        return random.choice(sorted(techs)) if techs else "T1082"\n\n'
+            "    def _simulate_inner(self, target: str, techniques: list) -> dict:\n",
             "PATCH:local_ludus-simulate-sig",
         )
 
