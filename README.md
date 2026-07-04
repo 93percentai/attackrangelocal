@@ -47,7 +47,9 @@ That's it. The wizard will:
 
 Flash, plug into the target box, boot. ~3 hours later you have a fully
 running, isolated lab reachable over Tailscale. See [`docs/unattended-iso.md`](docs/unattended-iso.md)
-for the full phase-by-phase rundown.
+for the full phase-by-phase rundown, or [`docs/iso-quick-start.md`](docs/iso-quick-start.md)
+for exactly where to get every value the wizard asks for and the hardware
+specs required per `RANGE_MODE`.
 
 **Before running the wizard, have ready:**
 - A Tailscale account, a reusable auth key (`tskey-auth-…`), and an API key (`tskey-api-…`) — generate at <https://login.tailscale.com/admin/settings/keys>
@@ -202,6 +204,8 @@ Cleanly deregisters Tailscale devices, then destroys the VMs in Proxmox.
 
 ## Further reading
 
+- [`docs/iso-quick-start.md`](docs/iso-quick-start.md) — quick start for the
+  ISO build tool: where to get every config value and the specs required per `RANGE_MODE`
 - [`docs/unattended-iso.md`](docs/unattended-iso.md) — how the ISO pipeline works
 - [`docs/attack-range-patches.md`](docs/attack-range-patches.md) — what we change in upstream
 - [`docs/network-isolation.md`](docs/network-isolation.md) — every layer of the egress block
