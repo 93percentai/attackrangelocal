@@ -22,7 +22,8 @@ case "$MODE" in
     echo "Starting laptop-side continuous loop (interval ${SIM_INTERVAL_MINUTES}m, exclude ${SIM_EXCLUDE})"
     docker compose -f "${REPO_ROOT}/docker/attack-range.compose.yml" \
       exec attack_range python attack_range.py simulate \
-        --target "${RANGE_ID}-winclient1" \
+        --target winclient1 \
+        --techniques T1082 \
         --random \
         --loop \
         --interval "${SIM_INTERVAL_MINUTES}" \
