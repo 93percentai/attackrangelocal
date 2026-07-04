@@ -13,12 +13,20 @@
 #      in our own UI built specifically for this deployment.
 #   3. Adds the `ui` service built from ../ui/Dockerfile. Same port (4321)
 #      so your bookmarks still work.
+#
+# Note: PROVIDER / ATTACK_RANGE_TEMPLATE env vars are NOT read by upstream
+# splunk/attack_range v5.0.0 anywhere — provider comes from general.cloud_provider
+# inside the config YAML itself (see templates/local_ludus/default.yml), not
+# from the environment. Don't reintroduce them expecting them to do anything.
 
 services:
+  # One-shot CLI container (upstream tags it `profiles: [cli]`, so it never
+  # starts with `docker compose up -d` — it's invoked directly, e.g.:
+  #   docker compose ... run --rm attack_range build --template local_ludus/default.yml
+  # scripts/start-attack-range.sh runs this once to seed config/local-ludus-range.yml
+  # (general.status: running) so the `api` service's /attack-range/simulate
+  # endpoint has something to validate against.
   attack_range:
-    environment:
-      - PROVIDER=local_ludus
-      - ATTACK_RANGE_TEMPLATE=local_ludus/default.yml
     # Join the HOST's tailnet so MagicDNS resolution of lab VMs Just Works.
     network_mode: host
     volumes:
@@ -28,10 +36,15 @@ services:
       # Atomic Red Team atomics for `simulate --random` to pick from.
       - atomic-red-team:/opt/atomic-red-team
 
+  # This is the service that's actually always running and that
+  # /attack-range/simulate requests land on — it needs the SAME
+  # /inventory.yml mount as the CLI container above, or update_inventory_
+  # attack_range_servers()'s local_ludus short-circuit has nothing to copy.
   api:
-    environment:
-      - PROVIDER=local_ludus
     network_mode: host
+    volumes:
+      - ../ansible/inventory.yml:/inventory.yml:ro
+      - atomic-red-team:/opt/atomic-red-team
 
   # Upstream Astro UI: do not start. Its assumptions (cloud providers,
   # WireGuard client sharing, build/destroy buttons) don't fit local_ludus.
@@ -56,6 +69,8 @@ services:
       - AD_DOMAIN_ADMIN=${AD_DOMAIN_ADMIN:-rangeadmin}
       - AD_PASSWORD=${AD_PASSWORD:-}
       - ATTACK_RANGE_API=http://127.0.0.1:4000
+      # Matches general.attack_range_id in templates/local_ludus/default.yml.
+      - ATTACK_RANGE_ID=local-ludus-range
       - STATUS_FILE=/var/lib/ludus-bootstrap/status
     volumes:
       # Read bootstrap phase from the Ludus host.
