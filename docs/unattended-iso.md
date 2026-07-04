@@ -1,5 +1,10 @@
 # Unattended ISO pipeline
 
+> New to the ISO tool? Start with [`docs/iso-quick-start.md`](iso-quick-start.md)
+> for where to get every config value and the hardware specs required per
+> `RANGE_MODE`. This doc covers what happens under the hood once you build
+> and boot the ISO.
+
 A single bootable USB takes a bare-metal x86_64 box from **factory** to
 **fully-deployed range + continuous attacks running** with zero operator
 interaction after power-on.
