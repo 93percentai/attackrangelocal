@@ -17,8 +17,7 @@
 services:
   attack_range:
     environment:
-      - PROVIDER=local_ludus
-      - ATTACK_RANGE_TEMPLATE=local_ludus/default.yml
+      - cloud_provider=local_ludus
     # Join the HOST's tailnet so MagicDNS resolution of lab VMs Just Works.
     network_mode: host
     volumes:
@@ -30,7 +29,7 @@ services:
 
   api:
     environment:
-      - PROVIDER=local_ludus
+      - cloud_provider=local_ludus
     network_mode: host
 
   # Upstream Astro UI: do not start. Its assumptions (cloud providers,

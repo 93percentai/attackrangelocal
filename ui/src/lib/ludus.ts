@@ -103,7 +103,10 @@ export async function getVmStatuses(): Promise<VmStatus[]> {
   return VM_INVENTORY.map((vm) => {
     const fqdn = `${RANGE_ID}-${vm.name}`;
     const ts = peers[fqdn] ?? peers[fqdn.toLowerCase()];
-    const px = [...proxmoxByName.entries()].find(([k]) => k.includes(vm.name));
+    const px = [...proxmoxByName.entries()].find(([k]) => {
+      const norm = (s: string) => s.replace(/-/g, "").toLowerCase();
+      return norm(k).includes(norm(vm.name));
+    });
     return {
       name: vm.name,
       fqdn,
@@ -127,16 +130,21 @@ export async function triggerSimulate(opts: {
   interval?: number;
   exclude?: string;
 }): Promise<{ ok: boolean; detail: string }> {
+  const techniques = (opts.techniques ?? "")
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
   const body = {
+    attack_range_id: RANGE_ID,
     target: opts.target,
-    techniques: opts.techniques ?? "",
+    techniques: techniques.length ? techniques : ["T1082"],
     random: !!opts.random,
     loop: !!opts.loop,
     interval: opts.interval ?? 30,
     exclude: opts.exclude ?? "",
   };
   try {
-    const r = await fetch(`${ATTACK_RANGE_API}/simulate`, {
+    const r = await fetch(`${ATTACK_RANGE_API}/attack-range/simulate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

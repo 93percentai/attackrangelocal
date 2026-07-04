@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 String-based patcher that adds the `local_ludus` provider hooks to a fresh
-checkout of splunk/attack_range. Robust against minor line-number drift
+checkout of splunk/attack_range v5. Robust against minor line-number drift
 because it matches on function definitions and code patterns, not line numbers.
 
 Usage:
@@ -9,18 +9,14 @@ Usage:
 
 Patches applied (idempotent — safe to re-run):
 
-  Patch 1   Register `local_ludus` as a valid provider in the CLI and the
-            AttackRangeController constructor (alongside aws/azure/gcp).
+  Patch 1   Register `local_ludus` as a valid cloud_provider in the controller.
 
-  Patch 2   In managers/ansible_manager.py, gate every WireGuard-related
-            method behind `if self.provider != "local_ludus"`.
+  Patch 2   Gate WireGuard/VPN helpers when cloud_provider == local_ludus.
 
-  Patch 3   In managers/ansible_manager.py::update_inventory_attack_range_servers,
-            short-circuit to read /inventory.yml when provider == local_ludus.
+  Patch 3   Short-circuit inventory generation to /inventory.yml for local_ludus.
 
-  Patch 4   In attack_range.py, add --loop / --interval / --random / --exclude
-            to the simulate subparser. In attack_range_controller.py::simulate,
-            wrap the body in a while loop driven by those flags.
+  Patch 4   simulate --loop / --random / --interval / --exclude + relaxed
+            inventory host lookup for MagicDNS hostnames.
 
 The companion `new-files/` tree copies in:
   - attack_range/cloud_providers/local_ludus_provider.py
@@ -33,21 +29,6 @@ import sys
 from pathlib import Path
 
 
-def patch(file: Path, anchor: str, insert: str, marker: str) -> None:
-    """Insert `insert` immediately after the first occurrence of `anchor`.
-    Skips if `marker` already present in the file (idempotent)."""
-    text = file.read_text()
-    if marker in text:
-        print(f"  SKIP  {file.name} (marker {marker!r} already present)")
-        return
-    if anchor not in text:
-        print(f"  WARN  {file.name}: anchor not found: {anchor!r}")
-        return
-    new = text.replace(anchor, anchor + insert, 1)
-    file.write_text(new)
-    print(f"  OK    {file.name}: applied {marker}")
-
-
 def regex_patch(file: Path, pattern: str, replacement: str, marker: str) -> None:
     text = file.read_text()
     if marker in text:
@@ -55,9 +36,21 @@ def regex_patch(file: Path, pattern: str, replacement: str, marker: str) -> None
         return
     new, n = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE | re.DOTALL)
     if n == 0:
-        print(f"  WARN  {file.name}: pattern not matched")
+        print(f"  WARN  {file.name}: pattern not matched for {marker}")
         return
     file.write_text(new)
+    print(f"  OK    {file.name}: applied {marker}")
+
+
+def plain_patch(file: Path, old: str, new: str, marker: str) -> None:
+    text = file.read_text()
+    if marker in text:
+        print(f"  SKIP  {file.name} ({marker} already present)")
+        return
+    if old not in text:
+        print(f"  WARN  {file.name}: anchor not found for {marker}")
+        return
+    file.write_text(text.replace(old, new, 1))
     print(f"  OK    {file.name}: applied {marker}")
 
 
@@ -74,70 +67,76 @@ def main() -> int:
     cli = upstream / "attack_range.py"
     controller = ar_pkg / "attack_range_controller.py"
     ansible_mgr = ar_pkg / "managers" / "ansible_manager.py"
+    utils = ar_pkg / "utils.py"
 
     print(f"Patching {upstream} ...")
 
-    # ---- Patch 1: register local_ludus as a valid CLI provider ----
-    # Most v5 builds use argparse with choices=["aws","azure","gcp"]. We
-    # rewrite that list to include local_ludus. Marker is the string
-    # "local_ludus" itself; if it's already present we skip.
-    if cli.exists():
-        regex_patch(
-            cli,
-            r'choices\s*=\s*\["aws",\s*"azure",\s*"gcp"\]',
-            'choices=["aws", "azure", "gcp", "local_ludus"]',
-            '"local_ludus"',
-        )
-
-    # ---- Patch 1b: wire the controller's provider dispatcher ----
-    # Add a branch that instantiates LocalLudusProvider. We capture the
-    # leading whitespace of the gcp elif so the new elif matches the
-    # surrounding indentation level (varies by Attack Range version).
+    # ---- Patch 1: register local_ludus cloud provider ----
     if controller.exists():
         regex_patch(
             controller,
-            r'^(?P<indent>[ \t]*)elif self\.config\["general"\]\["provider"\] == "gcp":[^\n]*\n'
-            r'(?P<body>(?:\1[ \t]+[^\n]*\n)+)',
-            r'\g<0>'
-            r'\g<indent>elif self.config["general"]["provider"] == "local_ludus":'
-            r'  # PATCH:local_ludus-controller\n'
-            r'\g<indent>    from attack_range.cloud_providers.local_ludus_provider import LocalLudusProvider\n'
-            r'\g<indent>    self.provider = LocalLudusProvider(self.config, self.log)\n',
-            "PATCH:local_ludus-controller",
+            r'if self\.cloud_provider_name not in \["aws", "azure", "gcp"\]:',
+            'if self.cloud_provider_name not in ["aws", "azure", "gcp", "local_ludus"]:',
+            "PATCH:local_ludus-provider-list",
         )
-
-        # ---- Patch 2 + 2b: stub VPN phases when provider is local_ludus ----
         regex_patch(
             controller,
-            r'(?P<sig>^(?P<indent>[ \t]*)def\s+build_vpn_phase\s*\(self[^)]*\):\s*\n)',
-            r'\g<sig>'
-            r'\g<indent>    if self.config["general"]["provider"] == "local_ludus":\n'
-            r'\g<indent>        return  # PATCH:local_ludus-vpn-build\n',
+            r'Supported providers: aws, azure, gcp',
+            'Supported providers: aws, azure, gcp, local_ludus',
+            "PATCH:local_ludus-provider-error-msg",
+        )
+        regex_patch(
+            controller,
+            r'^(?P<indent>[ \t]*)else:\s+# aws\s*\n'
+            r'(?P=indent)    self\.cloud_provider = AWSProvider\(self\.config, self\.logger\)',
+            r'\g<indent>elif self.cloud_provider_name == "local_ludus":\n'
+            r'\g<indent>    from .cloud_providers.local_ludus_provider import LocalLudusProvider\n'
+            r'\g<indent>    self.cloud_provider = LocalLudusProvider(self.config, self.logger)\n'
+            r'\g<indent>else:  # aws\n'
+            r'\g<indent>    self.cloud_provider = AWSProvider(self.config, self.logger)',
+            "PATCH:local_ludus-init-provider",
+        )
+        plain_patch(
+            controller,
+            '        self.logger.info("[action] > build\\n")\n\n        # Check if config file path is provided\n',
+            '        self.logger.info("[action] > build\\n")\n\n'
+            '        if self.cloud_provider_name == "local_ludus":\n'
+            '            self.config_manager.update_status("running")\n'
+            '            self.logger.info("local_ludus: build skipped (Ludus owns VMs)")\n'
+            '            return  # PATCH:local_ludus-build-skip\n\n'
+            '        # Check if config file path is provided\n',
+            "PATCH:local_ludus-build-skip",
+        )
+        regex_patch(
+            controller,
+            r'if abort_check and abort_check\(\):\s*\n'
+            r'            raise RuntimeError\("Build aborted"\)\s*\n'
+            r'        # Update status to build_vpn',
+            'if abort_check and abort_check():\n'
+            '            raise RuntimeError("Build aborted")\n'
+            '        if self.cloud_provider_name == "local_ludus":\n'
+            '            self.config_manager.update_status("running")\n'
+            '            self.logger.info("local_ludus: VPN phase skipped (Tailscale handles access)")\n'
+            '            return None, None  # PATCH:local_ludus-vpn-build\n'
+            '        # Update status to build_vpn',
             "PATCH:local_ludus-vpn-build",
         )
-        regex_patch(
-            controller,
-            r'(?P<sig>^(?P<indent>[ \t]*)def\s+prompt_vpn_connection\s*\(self[^)]*\):\s*\n)',
-            r'\g<sig>'
-            r'\g<indent>    if self.config["general"]["provider"] == "local_ludus":\n'
-            r'\g<indent>        return  # PATCH:local_ludus-vpn-prompt\n',
-            "PATCH:local_ludus-vpn-prompt",
-        )
 
-    # ---- Patch 2c: gate WireGuard helpers in ansible_manager ----
+    # ---- Patch 2: gate WireGuard helpers in ansible_manager ----
     if ansible_mgr.exists():
         for fn in (
             "update_vpn_playbook",
             "update_vpn_config_playbook",
             "_patch_wireguard_allowed_ips",
             "_patch_wireguard_server_config",
+            "prompt_vpn_connection",
         ):
             marker = f"PATCH:local_ludus-wg-gate-{fn}"
             regex_patch(
                 ansible_mgr,
-                rf'(?P<sig>^(?P<indent>[ \t]*)def\s+{fn}\s*\(self[^)]*\):\s*\n)',
+                rf'(?P<sig>^(?P<indent>[ \t]*)def\s+{fn}\s*\(self[^)]*\)[^:]*:\s*\n)',
                 r'\g<sig>'
-                r'\g<indent>    if getattr(self, "provider", None) == "local_ludus":\n'
+                r'\g<indent>    if self.cloud_provider == "local_ludus":\n'
                 rf'\g<indent>        return  # {marker}\n',
                 marker,
             )
@@ -145,23 +144,27 @@ def main() -> int:
         # ---- Patch 3: static inventory injection ----
         regex_patch(
             ansible_mgr,
-            r'(?P<sig>^(?P<indent>[ \t]*)def\s+update_inventory_attack_range_servers\s*\(self[^)]*\):\s*\n)',
-            r'\g<sig>'
-            r'\g<indent>    # PATCH:local_ludus-static-inventory\n'
-            r'\g<indent>    if getattr(self, "provider", None) == "local_ludus":\n'
-            r'\g<indent>        import shutil, os\n'
-            r'\g<indent>        src = "/inventory.yml"\n'
-            r'\g<indent>        if os.path.exists(src):\n'
-            r'\g<indent>            shutil.copy(src, self.inventory_path)\n'
-            r'\g<indent>            self.log.info(f"local_ludus: copied static inventory from {src}")\n'
-            r'\g<indent>            return\n',
+            r'self\.logger\.info\("Updating inventory with attack_range servers from config\.\.\."\)\s*\n',
+            'self.logger.info("Updating inventory with attack_range servers from config...")\n\n'
+            '        # PATCH:local_ludus-static-inventory\n'
+            '        if self.cloud_provider == "local_ludus":\n'
+            '            import shutil, os\n'
+            '            src = "/inventory.yml"\n'
+            '            if os.path.exists(src):\n'
+            '                shutil.copy(src, self.inventory_path)\n'
+            '                self.logger.info(f"local_ludus: copied static inventory from {src}")\n'
+            '                return\n\n',
             "PATCH:local_ludus-static-inventory",
         )
 
-    # ---- Patch 4: simulate --loop / --random / --interval / --exclude ----
+    # ---- Patch 4a: simulate CLI flags (may already be present) ----
     if cli.exists():
-        # Add flags to the simulate subparser. We look for the line that
-        # creates --techniques and append our four new arguments after it.
+        regex_patch(
+            cli,
+            r'(simulate_parser\.add_argument\(\s*"-te",\s*"--techniques",\s*\n\s*required=True,)',
+            r'simulate_parser.add_argument(\n        "-te",\n        "--techniques",\n        required=False,',
+            "PATCH:local_ludus-simulate-techniques-optional",
+        )
         regex_patch(
             cli,
             r'(simulate_parser\.add_argument\(\s*"-te",\s*"--techniques".*?\)\s*\n)',
@@ -176,13 +179,25 @@ def main() -> int:
             r'        help="comma-separated T-IDs to never run")\n',
             "PATCH:local_ludus-simulate-flags",
         )
-
-        # Forward the new args to controller.simulate(). Match the existing
-        # simulate dispatch line and replace it with a loop-aware call.
+        plain_patch(
+            cli,
+            '    techniques = [t.strip() for t in args.techniques.split(",") if t.strip()]\n'
+            '    if not techniques:\n'
+            '        print("Error: No techniques specified. Please provide at least one technique ID.")\n'
+            '        sys.exit(1)\n',
+            '    if getattr(args, "random", False):\n'
+            '        techniques = []\n'
+            '    else:\n'
+            '        techniques = [t.strip() for t in (args.techniques or "").split(",") if t.strip()]\n'
+            '        if not techniques:\n'
+            '            print("Error: No techniques specified. Provide --techniques or use --random.")\n'
+            '            sys.exit(1)\n',
+            "PATCH:local_ludus-simulate-techniques-parse",
+        )
         regex_patch(
             cli,
-            r'controller\.simulate\(\s*args\.target\s*,\s*args\.techniques\s*\)',
-            'controller.simulate(args.target, args.techniques, '
+            r'controller\.simulate\(args\.target, techniques\)',
+            'controller.simulate(args.target, techniques, '
             'loop=getattr(args, "loop", False), '
             'random_pick=getattr(args, "random", False), '
             'interval_minutes=getattr(args, "interval", 30), '
@@ -191,16 +206,11 @@ def main() -> int:
         )
 
     if controller.exists():
-        # Wrap simulate() body in a loop. We RENAME the existing
-        # `def simulate(self, target, techniques):` to `_simulate_inner`
-        # so its body becomes a callable, then prepend a wrapper method
-        # with the new signature. Indent is captured from the original
-        # def so this works regardless of class nesting.
         regex_patch(
             controller,
-            r'^(?P<indent>[ \t]*)def\s+simulate\(self,\s*target,\s*techniques\)\s*:\s*\n',
-            r'\g<indent>def simulate(self, target, techniques, loop=False, random_pick=False, '
-            r'interval_minutes=30, exclude=""):  # PATCH:local_ludus-simulate-sig\n'
+            r'^(?P<indent>[ \t]*)def simulate\(self, target: str, techniques: list\) -> dict:\s*\n',
+            r'\g<indent>def simulate(self, target: str, techniques: list, loop=False, random_pick=False, '
+            r'interval_minutes=30, exclude="") -> dict:  # PATCH:local_ludus-simulate-sig\n'
             r'\g<indent>    import time, random, csv, glob\n'
             r'\g<indent>    _excluded = {t.strip() for t in (exclude or "").split(",") if t.strip()}\n'
             r'\g<indent>    def _pick():\n'
@@ -214,18 +224,53 @@ def main() -> int:
             r'\g<indent>                        techs.add(tid)\n'
             r'\g<indent>        return random.choice(sorted(techs)) if techs else "T1082"\n'
             r'\g<indent>    if not loop:\n'
-            r'\g<indent>        return self._simulate_inner(target, _pick() if random_pick else techniques)\n'
-            r'\g<indent>    self.log.info(f"simulate --loop: interval={interval_minutes}m exclude={_excluded}")\n'
+            r'\g<indent>        return self._simulate_inner(target, [_pick()] if random_pick and not techniques else techniques)\n'
+            r'\g<indent>    self.logger.info(f"simulate --loop: interval={interval_minutes}m exclude={_excluded}")\n'
             r'\g<indent>    while True:\n'
-            r'\g<indent>        chosen = _pick() if random_pick else techniques\n'
+            r'\g<indent>        chosen = [_pick()] if random_pick else techniques\n'
             r'\g<indent>        try:\n'
             r'\g<indent>            self._simulate_inner(target, chosen)\n'
             r'\g<indent>        except Exception as e:\n'
-            r'\g<indent>            self.log.warning(f"simulate iteration failed ({chosen}): {e}")\n'
+            r'\g<indent>            self.logger.warning(f"simulate iteration failed ({chosen}): {e}")\n'
             r'\g<indent>        time.sleep(interval_minutes * 60)\n'
             r'\n'
-            r'\g<indent>def _simulate_inner(self, target, techniques):  # PATCH:local_ludus-inner\n',
+            r'\g<indent>def _simulate_inner(self, target: str, techniques: list) -> dict:  # PATCH:local_ludus-inner\n',
             "PATCH:local_ludus-simulate-sig",
+        )
+        plain_patch(
+            controller,
+            '        if target not in inventory or \'hosts\' not in inventory.get(target, {}):\n'
+            '            available_groups = [k for k, v in inventory.items() if isinstance(v, dict) and \'hosts\' in v]\n'
+            '            error_msg = f"Inventory group \'{target}\' not found. Available groups: {\', \'.join(available_groups) if available_groups else \'None\'}"\n'
+            '            self.logger.error(error_msg)\n'
+            '            raise ValueError(error_msg)\n',
+            '        def _inventory_has_target(inv, name):\n'
+            '            if isinstance(inv, dict):\n'
+            '                hosts = inv.get("hosts") or {}\n'
+            '                if name in hosts:\n'
+            '                    return True\n'
+            '                if name in inv and isinstance(inv[name], dict) and inv[name].get("hosts"):\n'
+            '                    return True\n'
+            '                for child in (inv.get("children") or {}).values():\n'
+            '                    if _inventory_has_target(child, name):\n'
+            '                        return True\n'
+            '            return False\n'
+            '        if not _inventory_has_target(inventory, target):\n'
+            '            available_groups = [k for k, v in inventory.items() if isinstance(v, dict) and "hosts" in v]\n'
+            '            groups = ", ".join(available_groups) if available_groups else "None"\n'
+            '            error_msg = f"Inventory target {target!r} not found. Available groups: {groups}"\n'
+            '            self.logger.error(error_msg)\n'
+            '            raise ValueError(error_msg)\n',
+            "PATCH:local_ludus-inventory-lookup",
+        )
+
+    # ---- Patch 5: resolve local_ludus templates ----
+    if utils.exists():
+        regex_patch(
+            utils,
+            r'for provider in \["aws", "azure", "gcp"\]:',
+            'for provider in ["aws", "azure", "gcp", "local_ludus"]:',
+            "PATCH:local_ludus-template-resolve",
         )
 
     print("Done.")

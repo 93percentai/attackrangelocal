@@ -12,13 +12,12 @@ bump `ATTACK_RANGE_REF` in `bootstrap.sh` and re-run it.
 
 ### Patch 1 — register `local_ludus` as a valid provider
 
-**Why**: Attack Range hard-codes `aws | azure | gcp` in its CLI choices
-and in the provider dispatcher inside `AttackRangeController`.
+**Why**: Attack Range hard-codes `aws | azure | gcp` as `cloud_provider` values
+in `AttackRangeController` and the provider dispatcher.
 
 **Where**:
-- `attack_range.py` (CLI argparse `choices=...`)
-- `attack_range/attack_range_controller.py` (the elif chain that
-  instantiates the provider)
+- `attack_range/attack_range_controller.py` (`cloud_provider_name` check and
+  `_init_cloud_provider()`)
 
 **Companion file** (copied in, not patched): `attack_range/cloud_providers/local_ludus_provider.py`
 — implements `BaseProvider` methods as no-ops because Ludus already
@@ -30,13 +29,13 @@ created the VMs.
 runs lab provisioning behind it. On Ludus, Tailscale already provides
 mesh access; there's no WG router to stand up.
 
-**Where**:
-- `attack_range/managers/ansible_manager.py` — gate
+**Where**: `attack_range/managers/ansible_manager.py` — gate
   `update_vpn_playbook`, `update_vpn_config_playbook`,
-  `_patch_wireguard_allowed_ips`, `_patch_wireguard_server_config`
-  behind `if self.provider == "local_ludus": return`
-- `attack_range/attack_range_controller.py::build_vpn_phase` and
-  `::prompt_vpn_connection` — same early-return
+  `_patch_wireguard_allowed_ips`, `_patch_wireguard_server_config`,
+  `prompt_vpn_connection`
+  behind `if self.cloud_provider == "local_ludus": return`
+- `attack_range/attack_range_controller.py::build`, `::build_vpn_phase` —
+  early-return with `status: running`
 
 **Frontend**: The `app/` Astro UI is told `VITE_VPN_DISABLED=true` via the
 compose override, which hides the "Generate WireGuard config" / "Share"
@@ -52,11 +51,15 @@ hand-written inventory of Tailscale MagicDNS hostnames.
 gets a short-circuit at the top:
 
 ```python
-if getattr(self, "provider", None) == "local_ludus":
+if self.cloud_provider == "local_ludus":
     if os.path.exists("/inventory.yml"):
         shutil.copy("/inventory.yml", self.inventory_path)
         return
 ```
+
+`scripts/prepare-attack-range-config.sh` writes `config/${RANGE_ID}.yml`
+with `status: running` so simulate/API validation passes without a cloud
+build. `scripts/start-attack-range.sh` calls it automatically.
 
 `docker/attack-range.compose.yml` mounts `ansible/inventory.yml` at
 `/inventory.yml` in the container.

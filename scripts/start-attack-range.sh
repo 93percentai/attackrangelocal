@@ -17,10 +17,11 @@ if [[ ! -d "$FORK_DIR" ]]; then
   exit 1
 fi
 
-# Render inventory from current .env (RANGE_MODE picks full vs minimal)
+# Render inventory + Attack Range config from current .env
 set -a; source "${REPO_ROOT}/.env"; set +a
 source "${REPO_ROOT}/scripts/lib/render-inventory.sh"
 render_inventory
+bash "${REPO_ROOT}/scripts/prepare-attack-range-config.sh"
 
 cd "${REPO_ROOT}"
 docker compose \

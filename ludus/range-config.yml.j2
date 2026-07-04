@@ -169,7 +169,7 @@ ludus:
   # ---------------------------------------------------------------------------
   # Domain member — Windows 11 client (continuous attack target)
   # ---------------------------------------------------------------------------
-  - vm_name: "{{ range_id }}-win-client1"
+  - vm_name: "{{ range_id }}-winclient1"
     hostname: "{{ range_id }}-WINCLIENT1"
     template: win11-22h2-x64-enterprise-template
     vlan: 20
@@ -191,7 +191,7 @@ ludus:
   # ---------------------------------------------------------------------------
   # Domain member — Windows Server 2022 (file/IIS server)
   # ---------------------------------------------------------------------------
-  - vm_name: "{{ range_id }}-win-srv1"
+  - vm_name: "{{ range_id }}-winsrv1"
     hostname: "{{ range_id }}-WINSRV1"
     template: win2022-server-x64-template
     vlan: 20
