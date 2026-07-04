@@ -1,10 +1,16 @@
 ---
 import BaseLayout from "@/layouts/BaseLayout.astro";
-import { TECHNIQUES, VM_INVENTORY, RANGE } from "@/lib/ludus";
+import { TECHNIQUES, VM_INVENTORY } from "@/lib/ludus";
 
+// Bare role names (dc01, winclient1, ...) — these must match both
+// templates/local_ludus/default.yml's `attack_range: [].name` entries and
+// the per-host singleton inventory groups in ansible/inventory.yml.j2, which
+// is what AttackRangeController.simulate() validates `target` against.
+// (Not the Tailscale-qualified "${RANGE_ID}-winclient1" hostname — that's
+// only the underlying host *inside* that group.)
 const targets = VM_INVENTORY
   .filter(v => v.role.includes("member") || v.os.startsWith("Win") || v.os.includes("Ubuntu"))
-  .map(v => `${RANGE.id}-${v.name}`);
+  .map(v => v.name);
 ---
 <BaseLayout
   title="Simulate"
