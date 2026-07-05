@@ -57,17 +57,31 @@ ludus_config_is_complete() {
   [[ ${#db_key} -eq 32 ]]
 }
 
+host_uses_wifi_nat_pivot() {
+  grep -q 'vmbr0 reconfigured for WiFi NAT by attackrangelocal' /etc/network/interfaces 2>/dev/null \
+    || ip -4 addr show vmbr0 2>/dev/null | grep -q '10\.10\.10\.1/'
+}
+
 # Prints a Ludus 2.x server config.yml on stdout. Override any field with LUDUS_* env vars.
 render_ludus_server_config() {
   local iface ip gateway prefix netmask node pool nat db_key
 
-  iface="${LUDUS_PROXMOX_INTERFACE:-$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')}"
-  [[ -z "$iface" ]] && iface=vmbr0
-
-  gateway="${LUDUS_PROXMOX_GATEWAY:-$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')}"
-  ip="${LUDUS_PROXMOX_LOCAL_IP:-$(ip -4 -o addr show dev "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)}"
-  prefix="${LUDUS_PROXMOX_PREFIX:-$(ip -4 -o addr show dev "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f2 | head -1)}"
-  prefix="${prefix:-24}"
+  if host_uses_wifi_nat_pivot; then
+    # After WiFi pivot, vmbr0 is the internal NAT bridge (10.10.10.1); uplink is wlan*.
+    iface="${LUDUS_PROXMOX_INTERFACE:-vmbr0}"
+    ip="${LUDUS_PROXMOX_LOCAL_IP:-$(ip -4 -o addr show dev vmbr0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)}"
+    ip="${ip:-10.10.10.1}"
+    prefix="${LUDUS_PROXMOX_PREFIX:-$(ip -4 -o addr show dev vmbr0 2>/dev/null | awk '{print $4}' | cut -d/ -f2 | head -1)}"
+    prefix="${prefix:-24}"
+    gateway="${LUDUS_PROXMOX_GATEWAY:-$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')}"
+  else
+    iface="${LUDUS_PROXMOX_INTERFACE:-$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')}"
+    [[ -z "$iface" ]] && iface=vmbr0
+    gateway="${LUDUS_PROXMOX_GATEWAY:-$(ip -4 route show default 2>/dev/null | awk '{print $3; exit}')}"
+    ip="${LUDUS_PROXMOX_LOCAL_IP:-$(ip -4 -o addr show dev "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)}"
+    prefix="${LUDUS_PROXMOX_PREFIX:-$(ip -4 -o addr show dev "$iface" 2>/dev/null | awk '{print $4}' | cut -d/ -f2 | head -1)}"
+    prefix="${prefix:-24}"
+  fi
   netmask="${LUDUS_PROXMOX_NETMASK:-$(cidr_to_netmask "$prefix")}"
   node="${LUDUS_PROXMOX_NODE:-$(hostname -s)}"
   pool="${LUDUS_PROXMOX_VM_STORAGE_POOL:-$(detect_ludus_storage_pool)}"

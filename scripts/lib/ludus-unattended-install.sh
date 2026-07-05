@@ -23,8 +23,12 @@ set_proxmox_locale() {
 }
 
 ludus_latest_tag() {
+  if [[ -n "${LUDUS_VERSION:-}" ]]; then
+    echo "$LUDUS_VERSION"
+    return 0
+  fi
   curl -fsSL "https://gitlab.com/api/v4/projects/${LUDUS_PROJECT_ID}/repository/tags" \
-    | grep -o '"name":"[^"]*' | cut -d'"' -f4 | head -n1
+    | grep -o '"name":"[^"]*' | cut -d'"' -f4 | sort -V | tail -n1
 }
 
 ludus_client_installed() {
@@ -214,8 +218,18 @@ write_ludus_env_file() {
   local env_file="$LUDUS_ENV_FILE"
   local root_key=/opt/ludus/install/root-api-key
   local api_key=""
+  local f base
 
   install -d -m 700 "$(dirname "$env_file")"
+
+  # Ludus may write per-user API key files alongside root-api-key.
+  for f in /opt/ludus/install/*-api-key /opt/ludus/install/*-apikey; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f")"
+    [[ "$base" == "root-api-key" ]] && continue
+    api_key="$(tr -d '\n' <"$f")"
+    [[ -n "$api_key" ]] && break
+  done
 
   if command -v ludus-install-status >/dev/null 2>&1; then
     local status_out

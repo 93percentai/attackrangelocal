@@ -50,6 +50,7 @@ WIFI_SSID="${WIFI_SSID//$'\r'/}"
 WIFI_PASSWORD="${WIFI_PASSWORD//$'\r'/}"
 WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
 WIFI_INTERFACE="${WIFI_INTERFACE:-}"
+WIFI_HIDDEN_SSID="${WIFI_HIDDEN_SSID:-false}"
 WIFI_DISABLE_WIRED_AFTER_BOOT="${WIFI_DISABLE_WIRED_AFTER_BOOT:-false}"
 NAT_SUBNET="${NAT_SUBNET:-10.10.10.0/24}"
 NAT_GATEWAY="${NAT_GATEWAY:-10.10.10.1/24}"
@@ -107,18 +108,24 @@ drop_stale_vmbr0_default_route() {
 
 warn_before_vmbr0_pivot() {
   local logf=/var/log/attackrangelocal-wifi-pivot.log
-  local ts_host
+  local ts_host reconnect
   ts_host="$(hostname -s 2>/dev/null || hostname)"
+  if command -v tailscale >/dev/null 2>&1 \
+    && tailscale status --json 2>/dev/null | grep -q '"BackendState":"Running"'; then
+    reconnect="Reconnect via Tailscale:
+    tailscale status | grep -i ${ts_host}
+    ssh root@${ts_host}"
+  else
+    reconnect="Tailscale is not up yet (normal during first-boot WiFi pivot).
+    Use the LOCAL CONSOLE on this machine until first-boot reaches install-tailscale."
+  fi
   cat >&2 <<EOF
 
 ========================================================================
   SSH WILL DROP when vmbr0 moves to ${NAT_GATEWAY} (internal NAT bridge).
 
-  Reconnect via Tailscale from another machine on your tailnet:
-    tailscale status | grep -i ${ts_host}
-    ssh root@${ts_host}
+  ${reconnect}
 
-  Or use the local console on this machine.
   Pivot progress: ${logf}
 ========================================================================
 
@@ -377,6 +384,9 @@ country=${WIFI_COUNTRY}
 
 EOF
 wpa_passphrase "${WIFI_SSID}" "${WIFI_PASSWORD}" >> "$WPA_CONF"
+if [[ "${WIFI_HIDDEN_SSID,,}" =~ ^(true|yes|y|1)$ ]]; then
+  echo "    scan_ssid=1" >> "$WPA_CONF"
+fi
 chmod 600 "$WPA_CONF"
 
 # ---------- 5. Configure WiFi in interfaces.d (wired/vmbr0 left alone for now) ----------

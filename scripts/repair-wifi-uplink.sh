@@ -91,7 +91,12 @@ fi
 if [[ -n "$WIFI_IF" ]] && wifi_is_associated "$WIFI_IF"; then
   log "WiFi already associated to SSID — finishing DHCP + NAT only..."
   log "NOTE: SSH over ethernet WILL drop when vmbr0 pivots to 10.10.10.1."
-  log "      Reconnect via Tailscale: ssh root@$(hostname -s 2>/dev/null || hostname)"
+  if command -v tailscale >/dev/null 2>&1 \
+    && tailscale status --json 2>/dev/null | grep -q '"BackendState":"Running"'; then
+    log "      Reconnect via Tailscale: ssh root@$(hostname -s 2>/dev/null || hostname)"
+  else
+    log "      Use local console if SSH drops (Tailscale may not be up yet)."
+  fi
   [[ -f "$FINISH" ]] || fail "missing ${FINISH}"
   exec bash "$FINISH"
 fi

@@ -102,6 +102,16 @@ if [[ -z "$REPO_REF" ]]; then
 fi
 echo "    repo: $REPO_URL"
 echo "    ref:  $REPO_REF"
+if [[ "$REPO_REF" != "main" && "$REPO_REF" != "master" ]]; then
+  if git ls-remote "$REPO_URL" "refs/heads/${REPO_REF}" "refs/tags/${REPO_REF}" "${REPO_REF}" 2>/dev/null \
+    | grep -q .; then
+    echo "    ref verified on remote"
+  else
+    echo "ERROR: REPO_REF=${REPO_REF} not found on ${REPO_URL}" >&2
+    echo "       Push your branch/commit before building the ISO, or set REPO_REF=main." >&2
+    exit 1
+  fi
+fi
 
 # ---------- 4. Download Proxmox ISO (cached) ----------
 # Pin to a Proxmox VE 8.x release. The auto-installer answer.toml format is
@@ -117,12 +127,9 @@ fi
 
 # ---------- 4b. Download WiFi firmware (only when WIFI_ENABLE=true) ----------
 # The first-boot wrapper is capped at 1 MiB, so we can't embed entire
-# firmware-*.deb files (50+ MiB total). What we DO bundle: the iwlwifi
-# .ucode blobs — most modern laptops use Intel WiFi, and these are
-# self-contained binary blobs the kernel mmaps directly. ~5-8 MiB
-# uncompressed, ~3 MiB compressed. We stash them in /var/lib/proxmox-
-# firstboot/firmware/ via a side-channel staging dir on the ISO (NOT in
-# the first-boot wrapper) so first-boot can dpkg/cp them post-install.
+# firmware-*.deb files (50+ MiB total). We download Debian non-free
+# firmware .debs and xorriso-inject them at /firmware/ on the ISO so
+# first-boot can dpkg -i them offline (or fall back to apt over wired).
 FW_DEBS=()
 if [[ "${WIFI_ENABLE_NORM,,}" == "true" ]]; then
   echo "==> WIFI_ENABLE=true — downloading firmware .debs for offline install..."
@@ -153,6 +160,26 @@ if [[ "${WIFI_ENABLE_NORM,,}" == "true" ]]; then
 
   echo "    bundled $(printf '%s\n' "${FW_DEBS[@]}" | wc -l) firmware .deb(s):"
   printf '      %s\n' "${FW_DEBS[@]##*/}"
+
+  if [[ ${#FW_DEBS[@]} -eq 0 ]]; then
+    echo "ERROR: WIFI_ENABLE=true but no firmware .debs were downloaded." >&2
+    echo "       Check network access to ${FIRMWARE_URL_BASE:-deb.debian.org}." >&2
+    exit 1
+  fi
+  has_iwlwifi=0
+  for d in "${FW_DEBS[@]}"; do
+    [[ "$(basename "$d")" == firmware-iwlwifi_* ]] && has_iwlwifi=1
+  done
+  if [[ $has_iwlwifi -eq 0 ]]; then
+    echo "ERROR: WIFI_ENABLE=true but firmware-iwlwifi could not be resolved." >&2
+    echo "       Most laptops need Intel WiFi firmware — fix apt/catalog scrape." >&2
+    exit 1
+  fi
+  if ! command -v xorriso >/dev/null 2>&1; then
+    echo "ERROR: WIFI_ENABLE=true requires xorriso to inject firmware into the ISO." >&2
+    echo "       Install: apt install xorriso" >&2
+    exit 1
+  fi
 fi
 
 # ---------- 5. Validate the answer file ----------
