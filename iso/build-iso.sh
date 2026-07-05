@@ -84,13 +84,18 @@ chmod 600 "${PAYLOAD_STAGE}/secrets.env"
 # The wrapped first-boot script `git clone`s the repo and checks out this
 # exact commit, so the deployed range matches the one that built the ISO.
 echo "==> Resolving git ref for reproducible deploy..."
-: "${REPO_URL:=$(git -C "${REPO_ROOT}" config --get remote.origin.url)}"
+: "${REPO_URL:=$(git -C "${REPO_ROOT}" config --get remote.origin.url 2>/dev/null || true)}"
 # Translate sandbox proxy URLs to the canonical GitHub URL if applicable.
 case "$REPO_URL" in
   *93percentai/attackrangelocal*) REPO_URL="https://github.com/93percentai/attackrangelocal.git" ;;
   *dgxn4/attackrangelocal*)       REPO_URL="https://github.com/93percentai/attackrangelocal.git" ;;
 esac
-: "${REPO_REF:=$(git -C "${REPO_ROOT}" rev-parse HEAD)}"
+: "${REPO_URL:=https://github.com/93percentai/attackrangelocal.git}"
+: "${REPO_REF:=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)}"
+if [[ -z "$REPO_REF" ]]; then
+  echo "ERROR: could not resolve REPO_REF (not a git checkout?)" >&2
+  exit 1
+fi
 echo "    repo: $REPO_URL"
 echo "    ref:  $REPO_REF"
 
