@@ -402,7 +402,7 @@ multiple radios (e.g. wlp2s0, wlp3s0)." \
 "On laptops where the ethernet was a temporary dongle you plan to
 unplug, 'true' is right. 'false' keeps both interfaces up (WiFi
 becomes the default route; wired stays as failover)." \
-      "${CURRENT[WIFI_DISABLE_WIRED_AFTER_BOOT]:-true}" plain v_bool
+      "${CURRENT[WIFI_DISABLE_WIRED_AFTER_BOOT]:-false}" plain v_bool
   else
     # Normalise so .env always contains a clean value.
     ANSWERS[WIFI_ENABLE]=false
