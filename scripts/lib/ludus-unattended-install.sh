@@ -33,7 +33,53 @@ ludus_client_installed() {
 
 ludus_server_ready() {
   [[ -f /opt/ludus/install/.stage-3-complete ]] \
+    && [[ -f /opt/ludus/install/root-api-key ]] \
     && systemctl is-active --quiet ludus.service 2>/dev/null
+}
+
+start_ludus_services() {
+  systemctl daemon-reload 2>/dev/null || true
+  for unit in ludus-admin.service ludus.service; do
+    if [[ -f "/etc/systemd/system/${unit}" ]]; then
+      systemctl enable "$unit" 2>/dev/null || true
+      if ! systemctl is-active --quiet "$unit" 2>/dev/null; then
+        echo "Starting ${unit}..."
+        systemctl start "$unit" || echo "WARN: systemctl start ${unit} failed"
+      fi
+    fi
+  done
+}
+
+# ludus-server --no-prompt runs the ansible playbook then exits. The API/keyring
+# are created when ludus.service starts and ludus-server enters serve() mode.
+finalize_ludus_post_install() {
+  if [[ ! -f /opt/ludus/install/.stage-3-complete ]]; then
+    return 0
+  fi
+
+  echo "Finalizing Ludus post-install (start services, wait for API key)..."
+  start_ludus_services
+
+  local i max="${LUDUS_API_KEY_WAIT_ITERATIONS:-60}"
+  local root_key=/opt/ludus/install/root-api-key
+
+  for ((i = 1; i <= max; i++)); do
+    if [[ -f "$root_key" ]]; then
+      echo "Ludus root API key is present."
+      return 0
+    fi
+    if (( i % 6 == 0 )); then
+      start_ludus_services
+      journalctl -u ludus.service -u ludus-admin.service -n 5 --no-pager 2>/dev/null || true
+    fi
+    echo "Waiting for Ludus API bootstrap (${i}/${max})..."
+    sleep 5
+  done
+
+  echo "Ludus playbook finished but root-api-key was never created." >&2
+  echo "Check: systemctl status ludus.service ludus-admin.service" >&2
+  echo "       journalctl -u ludus.service -n 50" >&2
+  return 1
 }
 
 ludus_install_in_progress() {
@@ -209,6 +255,17 @@ run_ludus_unattended_install() {
     return 0
   fi
 
+  # Playbook done but API never started (common after manual --no-prompt run).
+  if [[ -f /opt/ludus/install/.stage-3-complete ]]; then
+    finalize_ludus_post_install
+    write_ludus_env_file
+    set_proxmox_locale
+    # shellcheck disable=SC1091
+    source "$LUDUS_ENV_FILE"
+    echo "Ludus install complete: $(ludus version)"
+    return 0
+  fi
+
   if ludus_install_in_progress; then
     echo "Ludus install already in progress — waiting for completion..."
     wait_for_ludus_ready
@@ -218,6 +275,7 @@ run_ludus_unattended_install() {
 
   install_ludus_client_only
   install_ludus_server_unattended
+  finalize_ludus_post_install
 
   if ! ludus_server_ready; then
     if ludus_install_in_progress || [[ -d /opt/ludus ]]; then
