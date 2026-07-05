@@ -16,7 +16,7 @@
 # first-boot from REPO_URL@REPO_REF for reproducible deploys.
 #
 # Logs to /var/log/attackrangelocal-firstboot.log (also visible via
-# `journalctl -u proxmox-firstboot`).
+# `journalctl -u proxmox-first-boot`).
 set -euo pipefail
 exec > >(tee -a /var/log/attackrangelocal-firstboot.log) 2>&1
 
@@ -195,4 +195,4 @@ phase range-up-continuous-sim-running
 echo "Range is fully up. Access Splunk at https://<RANGE_ID>-splunk:8000 over Tailscale."
 
 # Disable ourselves so we don't run again on the next boot.
-systemctl disable proxmox-firstboot.service || true
+systemctl disable proxmox-first-boot.service || true

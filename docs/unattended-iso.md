@@ -47,7 +47,7 @@ a systemd oneshot unit Proxmox's installer registers. It:
   phase: `wait-for-network`, `install-tailscale-on-host`, `install-ludus`,
   `install-roles-and-templates`, `deploy-range`, `lock-down-egress`,
   `start-continuous-simulation`, `range-up-continuous-sim-running`
-- **Logs**: `journalctl -u proxmox-firstboot -f` or
+- **Logs**: `journalctl -u proxmox-first-boot -f` or
   `tail -f /var/log/attackrangelocal-firstboot.log`
 - **Optional webhook**: set `NOTIFY_WEBHOOK=...` in `.env` to get a Slack
   or Discord ping on every phase transition
@@ -93,8 +93,8 @@ pipeline (e.g. if Proxmox installed fine but Ludus deploy failed), on the
 host:
 
 ```bash
-systemctl enable proxmox-firstboot.service
-systemctl start  proxmox-firstboot.service
+systemctl enable proxmox-first-boot.service
+systemctl start  proxmox-first-boot.service
 ```
 
 To do *just* a range redeploy (skipping Proxmox/Ludus install):
