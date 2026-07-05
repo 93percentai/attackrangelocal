@@ -67,9 +67,9 @@ EOF
 ensure_pve_apt_no_subscription
 
 phase install-git
-# Proxmox VE base image doesn't ship git; install it before cloning.
+# Proxmox VE base image doesn't ship git or vim; install before cloning.
 apt-get update -qq
-apt-get install -y --no-install-recommends git >/dev/null
+apt-get install -y --no-install-recommends git vim >/dev/null
 
 phase clone-repo
 # REPO_URL and REPO_REF are injected by iso/build-iso.sh at the top of the
