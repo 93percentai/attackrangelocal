@@ -23,6 +23,8 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${REPO_ROOT}/.env"
 EXAMPLE="${REPO_ROOT}/ludus/.env.example"
 BUILD_SCRIPT="${REPO_ROOT}/iso/build-iso.sh"
+# shellcheck source=scripts/lib/normalize-disk-list.sh
+source "${REPO_ROOT}/scripts/lib/normalize-disk-list.sh"
 
 MODE=interactive
 case "${1:-}" in
@@ -492,14 +494,9 @@ write_env() {
              SIM_EXCLUDE SIM_INTERVAL_MINUTES; do
       v="${ANSWERS[$k]:-${CURRENT[$k]:-${DEFAULTS[$k]:-}}}"
       if [[ "$k" == DISK_DEVICE_LIST ]]; then
-        v="${v//$'\r'/}"
-        v="${v//$'\n'/}"
-        v="${v// /}"
-        if [[ "$v" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
-          v="[\"${v}\"]"
-        elif [[ "$v" =~ ^\[([a-zA-Z0-9_.-]+)\]$ ]]; then
-          v="[\"${BASH_REMATCH[1]}\"]"
-        fi
+        v="$(normalize_disk_device_list "$v")"
+        printf '%s=%s\n' "$k" "$v"
+        continue
       fi
       # Quote values containing spaces or special chars.
       if [[ "$v" =~ [[:space:]\"\'$#] ]]; then
@@ -555,10 +552,14 @@ do_build() {
   elif grep -qiE 'curl: \(2[28]\)|Failed to connect' "$log"; then
     err "Network connection died mid-download."
     note "Retry; the cached ISO under iso/cache/ resumes correctly."
-  elif grep -qi 'validate-answer' "$log"; then
+  elif grep -qi 'validate-answer\|parsing answer file' "$log"; then
     err "answer.toml failed Proxmox validation."
     note "Look at iso/build/answer.toml; common causes: weird characters in"
     note "root_password, malformed root_ssh_keys, or a typo in [disk-setup]."
+    if grep -qi 'disk-list' "$log"; then
+      note "DISK_DEVICE_LIST in .env must be exactly:  DISK_DEVICE_LIST=[\"nvme0n1\"]"
+      note "(no extra quotes — the wizard used to double-wrap this; pull latest main)"
+    fi
   elif grep -qi 'Required env var' "$log"; then
     err "A required env var was empty when build-iso.sh ran."
     note "Re-run the wizard — one of the required prompts may have been skipped."

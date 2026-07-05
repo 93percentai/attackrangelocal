@@ -44,22 +44,9 @@ export WIFI_ENABLE_NORM
 #   nvme0n1    NVMe (modern laptops, M.2 SSDs) -- DEFAULT
 #   vda        VirtIO (nested QEMU/KVM testing)
 : "${DISK_DEVICE_LIST:='["nvme0n1"]'}"
-# Must render as valid TOML in answer.toml.j2 (disk-list = ${DISK_DEVICE_LIST}).
-DISK_DEVICE_LIST="${DISK_DEVICE_LIST//$'\r'/}"
-DISK_DEVICE_LIST="${DISK_DEVICE_LIST//$'\n'/}"
-DISK_DEVICE_LIST="${DISK_DEVICE_LIST// /}"
-if [[ "$DISK_DEVICE_LIST" =~ ^\[\"[^\"]+\"\]$ ]]; then
-  :
-elif [[ "$DISK_DEVICE_LIST" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
-  DISK_DEVICE_LIST="[\"${DISK_DEVICE_LIST}\"]"
-elif [[ "$DISK_DEVICE_LIST" =~ ^\[([^]]*)\]$ ]]; then
-  inner="${BASH_REMATCH[1]//\"/}"
-  inner="${inner// /}"
-  DISK_DEVICE_LIST="[\"${inner}\"]"
-else
-  echo "ERROR: DISK_DEVICE_LIST must be a TOML array like [\"nvme0n1\"] (got: ${DISK_DEVICE_LIST})" >&2
-  exit 1
-fi
+# shellcheck source=scripts/lib/normalize-disk-list.sh
+source "${REPO_ROOT}/scripts/lib/normalize-disk-list.sh"
+DISK_DEVICE_LIST="$(normalize_disk_device_list "$DISK_DEVICE_LIST")"
 export DISK_DEVICE_LIST
 
 required=(RANGE_ID TS_AUTHKEY TS_API_KEY AD_DOMAIN_FQDN AD_DOMAIN_ADMIN
