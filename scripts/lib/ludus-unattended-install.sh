@@ -33,8 +33,8 @@ ludus_client_installed() {
 
 ludus_server_ready() {
   [[ -f /opt/ludus/install/.stage-3-complete ]] \
-    && [[ -f /opt/ludus/install/root-api-key ]] \
-    && systemctl is-active --quiet ludus.service 2>/dev/null
+    && systemctl is-active --quiet ludus-admin.service 2>/dev/null \
+    && { [[ -f /opt/ludus/install/initial-admin-userid ]] || [[ -f /opt/ludus/install/root-api-key ]]; }
 }
 
 start_ludus_services() {
@@ -220,18 +220,31 @@ write_ludus_env_file() {
   if command -v ludus-install-status >/dev/null 2>&1; then
     local status_out
     status_out="$(ludus-install-status 2>&1 || true)"
-    api_key="$(printf '%s\n' "$status_out" | sed -n "s/.*LUDUS_API_KEY='\([^']*\)'.*/\1/p" | head -1)"
+    # Prefer the initial admin user's API key (ROOT cannot run most ludus CLI commands).
+    api_key="$(printf '%s\n' "$status_out" | sed -n 's/.*API key for user [^:]*: \([^[:space:]]*\).*/\1/p' | head -1)"
+    if [[ -z "$api_key" ]]; then
+      api_key="$(printf '%s\n' "$status_out" | sed -n "s/.*LUDUS_API_KEY='\([^']*\)'.*/\1/p" | head -1)"
+    fi
     if [[ -z "$api_key" ]]; then
       api_key="$(printf '%s\n' "$status_out" | sed -n 's/.*| \([A-Za-z][A-Za-z0-9]*\.[^ |]*\) |.*/\1/p' | head -1)"
     fi
   fi
 
+  if [[ -z "$api_key" && -f /opt/ludus/install/initial-admin-userid ]]; then
+    local admin_id
+    admin_id="$(tr -d '\n' < /opt/ludus/install/initial-admin-userid)"
+    if command -v ludus >/dev/null 2>&1 && [[ -f "$root_key" ]]; then
+      api_key="$(LUDUS_API_KEY="$(tr -d '\n' < "$root_key")" ludus user apikey --user "$admin_id" 2>/dev/null | tail -1 || true)"
+    fi
+  fi
+
   if [[ -z "$api_key" && -f "$root_key" ]]; then
+    echo "WARN: only ROOT API key found; use ludus-install-status admin key for CLI access" >&2
     api_key="$(tr -d '\n' < "$root_key")"
   fi
 
   if [[ -z "$api_key" ]]; then
-    echo "Ludus is up but no API key was found under /opt/ludus/install/" >&2
+    echo "Ludus is up but no API key was found. Run: ludus-install-status" >&2
     return 1
   fi
 

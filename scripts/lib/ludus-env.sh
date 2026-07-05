@@ -8,9 +8,17 @@ source_ludus_env() {
   if [[ -f "$LUDUS_ENV_FILE" ]]; then
     # shellcheck disable=SC1090
     set -a; source "$LUDUS_ENV_FILE"; set +a
-  elif [[ -f /opt/ludus/install/root-api-key ]]; then
-    export LUDUS_API_KEY
-    LUDUS_API_KEY="$(tr -d '\n' < /opt/ludus/install/root-api-key)"
+    return 0
+  fi
+  # Do not default to ROOT — most ludus CLI commands reject it.
+  if command -v ludus-install-status >/dev/null 2>&1; then
+    local status_out api_key
+    status_out="$(ludus-install-status 2>&1 || true)"
+    api_key="$(printf '%s\n' "$status_out" | sed -n 's/.*API key for user [^:]*: \([^[:space:]]*\).*/\1/p' | head -1)"
+    if [[ -n "$api_key" ]]; then
+      export LUDUS_API_KEY="$api_key"
+      return 0
+    fi
   fi
 }
 
