@@ -93,8 +93,9 @@ esac
 : "${REPO_URL:=https://github.com/93percentai/attackrangelocal.git}"
 : "${REPO_REF:=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)}"
 if [[ -z "$REPO_REF" ]]; then
-  echo "ERROR: could not resolve REPO_REF (not a git checkout?)" >&2
-  exit 1
+  REPO_REF=main
+  echo "WARN: not a git checkout — pinning first-boot to REPO_REF=main" >&2
+  echo "       Clone with git for a reproducible deploy, or set REPO_REF explicitly." >&2
 fi
 echo "    repo: $REPO_URL"
 echo "    ref:  $REPO_REF"
