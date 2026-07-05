@@ -40,6 +40,32 @@ phase() {
 phase wait-for-network
 until ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; do sleep 2; done
 
+# Fresh PVE installs default to enterprise.proxmox.com apt repos, which 401
+# without a subscription. first-boot needs working apt before git/Ludus/etc.
+ensure_pve_apt_no_subscription() {
+  local f
+  for f in /etc/apt/sources.list.d/pve-enterprise.list \
+           /etc/apt/sources.list.d/ceph.list; do
+    if [[ -f "$f" ]] && grep -qE '^[[:space:]]*deb[[:space:]]' "$f"; then
+      sed -i.bak-attackrange 's/^[[:space:]]*deb /# deb /' "$f"
+      echo "Disabled enterprise repo: $f"
+    fi
+  done
+  if [[ ! -f /etc/apt/sources.list.d/pve-no-subscription.list ]]; then
+    cat >/etc/apt/sources.list.d/pve-no-subscription.list <<'EOF'
+deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription
+EOF
+    echo "Added pve-no-subscription apt source"
+  fi
+  if [[ ! -f /etc/apt/sources.list.d/ceph-no-subscription.list ]]; then
+    cat >/etc/apt/sources.list.d/ceph-no-subscription.list <<'EOF'
+deb http://download.proxmox.com/debian/ceph-quincy bookworm no-subscription
+EOF
+    echo "Added ceph no-subscription apt source"
+  fi
+}
+ensure_pve_apt_no_subscription
+
 phase install-git
 # Proxmox VE base image doesn't ship git; install it before cloning.
 apt-get update -qq
