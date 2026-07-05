@@ -21,8 +21,26 @@
 
 set -euo pipefail
 
-: "${WIFI_SSID:?WIFI_SSID must be set}"
-: "${WIFI_PASSWORD:?WIFI_PASSWORD must be set}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load baked secrets when invoked manually (`source secrets.env` in the parent
+# shell does NOT export vars to this subprocess unless you used `set -a`).
+if [[ -z "${WIFI_SSID:-}" || -z "${WIFI_PASSWORD:-}" ]]; then
+  for secrets in /var/lib/proxmox-firstboot/secrets.env \
+                 "${SCRIPT_DIR}/../.env" \
+                 /opt/attackrangelocal/.env; do
+    if [[ -f "$secrets" ]]; then
+      set -a
+      # shellcheck disable=SC1090
+      source "$secrets"
+      set +a
+      break
+    fi
+  done
+fi
+
+: "${WIFI_SSID:?WIFI_SSID must be set (check /var/lib/proxmox-firstboot/secrets.env)}"
+: "${WIFI_PASSWORD:?WIFI_PASSWORD must be set (check /var/lib/proxmox-firstboot/secrets.env)}"
 WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
 WIFI_INTERFACE="${WIFI_INTERFACE:-}"
 WIFI_DISABLE_WIRED_AFTER_BOOT="${WIFI_DISABLE_WIRED_AFTER_BOOT:-true}"
@@ -32,7 +50,6 @@ NAT_GATEWAY="${NAT_GATEWAY:-10.10.10.1/24}"
 log()  { echo "[$(date -u +%FT%TZ)] wifi: $*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/ensure-debian-apt.sh
 source "${SCRIPT_DIR}/lib/ensure-debian-apt.sh"
 
