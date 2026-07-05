@@ -28,7 +28,7 @@ fi
 
 echo "Reloading networking..."
 if command -v ifreload >/dev/null 2>&1; then
-  ifreload -a
+  ifreload -a 2>&1 || true
 else
   for nic in $(ls /sys/class/net | grep -E '^(en|eth)'); do
     ifup "$nic" 2>/dev/null || true
@@ -37,4 +37,5 @@ else
 fi
 
 echo "Done. Test: ping -c2 1.1.1.1"
+ip -4 route show default 2>/dev/null || echo "(no default route — check gateway in /etc/network/interfaces)"
 ip -4 addr show vmbr0 2>/dev/null || ip -4 route show default

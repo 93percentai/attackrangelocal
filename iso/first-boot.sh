@@ -106,7 +106,7 @@ if [[ "${WIFI_ENABLE_NORM,,}" =~ ^(true|yes|y|1)$ ]]; then
   if ! compgen -G "$FW_DIR/*.deb" > /dev/null; then
     echo "Scanning block devices for the install ISO (looking for /firmware/MANIFEST)..."
     MNT=$(mktemp -d)
-    for dev in $(lsblk -lpno NAME,TYPE | awk '$2=="rom"||$2=="part"{print $1}'); do
+    for dev in $(lsblk -lpno NAME,TYPE | awk '$2=="rom"||$2=="part"||$2=="disk"{print $1}'); do
       mount -o ro "$dev" "$MNT" 2>/dev/null || continue
       if [[ -f "$MNT/firmware/MANIFEST" ]]; then
         echo "  Found install media on $dev — copying firmware..."

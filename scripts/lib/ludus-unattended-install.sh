@@ -23,8 +23,12 @@ set_proxmox_locale() {
 }
 
 ludus_latest_tag() {
+  if [[ -n "${LUDUS_VERSION:-}" ]]; then
+    echo "$LUDUS_VERSION"
+    return 0
+  fi
   curl -fsSL "https://gitlab.com/api/v4/projects/${LUDUS_PROJECT_ID}/repository/tags" \
-    | grep -o '"name":"[^"]*' | cut -d'"' -f4 | head -n1
+    | grep -o '"name":"[^"]*' | cut -d'"' -f4 | sort -V | tail -n1
 }
 
 ludus_client_installed() {
@@ -33,7 +37,53 @@ ludus_client_installed() {
 
 ludus_server_ready() {
   [[ -f /opt/ludus/install/.stage-3-complete ]] \
-    && systemctl is-active --quiet ludus.service 2>/dev/null
+    && systemctl is-active --quiet ludus-admin.service 2>/dev/null \
+    && { [[ -f /opt/ludus/install/initial-admin-userid ]] || [[ -f /opt/ludus/install/root-api-key ]]; }
+}
+
+start_ludus_services() {
+  systemctl daemon-reload 2>/dev/null || true
+  for unit in ludus-admin.service ludus.service; do
+    if [[ -f "/etc/systemd/system/${unit}" ]]; then
+      systemctl enable "$unit" 2>/dev/null || true
+      if ! systemctl is-active --quiet "$unit" 2>/dev/null; then
+        echo "Starting ${unit}..."
+        systemctl start "$unit" || echo "WARN: systemctl start ${unit} failed"
+      fi
+    fi
+  done
+}
+
+# ludus-server --no-prompt runs the ansible playbook then exits. The API/keyring
+# are created when ludus.service starts and ludus-server enters serve() mode.
+finalize_ludus_post_install() {
+  if [[ ! -f /opt/ludus/install/.stage-3-complete ]]; then
+    return 0
+  fi
+
+  echo "Finalizing Ludus post-install (start services, wait for API key)..."
+  start_ludus_services
+
+  local i max="${LUDUS_API_KEY_WAIT_ITERATIONS:-60}"
+  local root_key=/opt/ludus/install/root-api-key
+
+  for ((i = 1; i <= max; i++)); do
+    if [[ -f "$root_key" ]]; then
+      echo "Ludus root API key is present."
+      return 0
+    fi
+    if (( i % 6 == 0 )); then
+      start_ludus_services
+      journalctl -u ludus.service -u ludus-admin.service -n 5 --no-pager 2>/dev/null || true
+    fi
+    echo "Waiting for Ludus API bootstrap (${i}/${max})..."
+    sleep 5
+  done
+
+  echo "Ludus playbook finished but root-api-key was never created." >&2
+  echo "Check: systemctl status ludus.service ludus-admin.service" >&2
+  echo "       journalctl -u ludus.service -n 50" >&2
+  return 1
 }
 
 ludus_install_in_progress() {
@@ -126,9 +176,9 @@ install_ludus_server_unattended() {
     echo "Downloaded Ludus server ${tag}"
   fi
 
-  if [[ ! -f "${workdir}/config.yml" ]]; then
-    echo "Writing ${workdir}/config.yml from host network detection..."
-    render_ludus_server_config >"${workdir}/config.yml"
+  if [[ ! -f "${workdir}/config.yml" ]] || ! ludus_config_is_complete "${workdir}/config.yml"; then
+    echo "Writing complete Ludus 2.x config at ${workdir}/config.yml..."
+    ensure_ludus_server_config "${workdir}/config.yml"
   fi
 
   echo "Starting Ludus server install via ludus-server --no-prompt..."
@@ -168,24 +218,47 @@ write_ludus_env_file() {
   local env_file="$LUDUS_ENV_FILE"
   local root_key=/opt/ludus/install/root-api-key
   local api_key=""
+  local f base
 
   install -d -m 700 "$(dirname "$env_file")"
+
+  # Ludus may write per-user API key files alongside root-api-key.
+  for f in /opt/ludus/install/*-api-key /opt/ludus/install/*-apikey; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f")"
+    [[ "$base" == "root-api-key" ]] && continue
+    api_key="$(tr -d '\n' <"$f")"
+    [[ -n "$api_key" ]] && break
+  done
 
   if command -v ludus-install-status >/dev/null 2>&1; then
     local status_out
     status_out="$(ludus-install-status 2>&1 || true)"
-    api_key="$(printf '%s\n' "$status_out" | sed -n "s/.*LUDUS_API_KEY='\([^']*\)'.*/\1/p" | head -1)"
+    # Prefer the initial admin user's API key (ROOT cannot run most ludus CLI commands).
+    api_key="$(printf '%s\n' "$status_out" | sed -n 's/.*API key for user [^:]*: \([^[:space:]]*\).*/\1/p' | head -1)"
+    if [[ -z "$api_key" ]]; then
+      api_key="$(printf '%s\n' "$status_out" | sed -n "s/.*LUDUS_API_KEY='\([^']*\)'.*/\1/p" | head -1)"
+    fi
     if [[ -z "$api_key" ]]; then
       api_key="$(printf '%s\n' "$status_out" | sed -n 's/.*| \([A-Za-z][A-Za-z0-9]*\.[^ |]*\) |.*/\1/p' | head -1)"
     fi
   fi
 
+  if [[ -z "$api_key" && -f /opt/ludus/install/initial-admin-userid ]]; then
+    local admin_id
+    admin_id="$(tr -d '\n' < /opt/ludus/install/initial-admin-userid)"
+    if command -v ludus >/dev/null 2>&1 && [[ -f "$root_key" ]]; then
+      api_key="$(LUDUS_API_KEY="$(tr -d '\n' < "$root_key")" ludus user apikey --user "$admin_id" 2>/dev/null | tail -1 || true)"
+    fi
+  fi
+
   if [[ -z "$api_key" && -f "$root_key" ]]; then
+    echo "WARN: only ROOT API key found; use ludus-install-status admin key for CLI access" >&2
     api_key="$(tr -d '\n' < "$root_key")"
   fi
 
   if [[ -z "$api_key" ]]; then
-    echo "Ludus is up but no API key was found under /opt/ludus/install/" >&2
+    echo "Ludus is up but no API key was found. Run: ludus-install-status" >&2
     return 1
   fi
 
@@ -209,6 +282,17 @@ run_ludus_unattended_install() {
     return 0
   fi
 
+  # Playbook done but API never started (common after manual --no-prompt run).
+  if [[ -f /opt/ludus/install/.stage-3-complete ]]; then
+    finalize_ludus_post_install
+    write_ludus_env_file
+    set_proxmox_locale
+    # shellcheck disable=SC1091
+    source "$LUDUS_ENV_FILE"
+    echo "Ludus install complete: $(ludus version)"
+    return 0
+  fi
+
   if ludus_install_in_progress; then
     echo "Ludus install already in progress — waiting for completion..."
     wait_for_ludus_ready
@@ -218,6 +302,7 @@ run_ludus_unattended_install() {
 
   install_ludus_client_only
   install_ludus_server_unattended
+  finalize_ludus_post_install
 
   if ! ludus_server_ready; then
     if ludus_install_in_progress || [[ -d /opt/ludus ]]; then

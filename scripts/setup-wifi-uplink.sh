@@ -17,7 +17,9 @@
 #   WIFI_DISABLE_WIRED_AFTER_BOOT  true = stop the install-time wired NIC
 #
 # Idempotent: re-running fixes a partial setup but does not break a
-# working one. Exit non-zero on the first hard error.
+# working one. After a failed first-boot WiFi pivot, prefer:
+#   scripts/repair-wifi-uplink.sh
+# Exit non-zero on the first hard error.
 
 set -euo pipefail
 
@@ -43,14 +45,187 @@ fi
 
 : "${WIFI_SSID:?WIFI_SSID must be set (check /var/lib/proxmox-firstboot/secrets.env)}"
 : "${WIFI_PASSWORD:?WIFI_PASSWORD must be set (check /var/lib/proxmox-firstboot/secrets.env)}"
+# secrets.env from Windows editors sometimes carries stray CR bytes.
+WIFI_SSID="${WIFI_SSID//$'\r'/}"
+WIFI_PASSWORD="${WIFI_PASSWORD//$'\r'/}"
 WIFI_COUNTRY="${WIFI_COUNTRY:-US}"
 WIFI_INTERFACE="${WIFI_INTERFACE:-}"
+WIFI_HIDDEN_SSID="${WIFI_HIDDEN_SSID:-false}"
 WIFI_DISABLE_WIRED_AFTER_BOOT="${WIFI_DISABLE_WIRED_AFTER_BOOT:-false}"
 NAT_SUBNET="${NAT_SUBNET:-10.10.10.0/24}"
 NAT_GATEWAY="${NAT_GATEWAY:-10.10.10.1/24}"
 
 log()  { echo "[$(date -u +%FT%TZ)] wifi: $*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
+
+wifi_wpa_state() {
+  wpa_cli -i "$1" status 2>/dev/null | awk -F= '/^wpa_state=/{print $2; exit}'
+}
+
+wifi_ipv4() {
+  ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
+}
+
+wifi_default_gateway() {
+  ip -4 route show dev "$1" 2>/dev/null | awk '/^default/{print $3; exit}'
+}
+
+wifi_uplink_ready() {
+  local iface="$1"
+  local gw
+  gw="$(wifi_default_gateway "$iface")"
+  if ping -c1 -W3 -I "$iface" 1.1.1.1 >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -n "$gw" ]] && ping -c1 -W3 -I "$iface" "$gw" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# vmbr0 may still be the install-time DHCP bridge on the same LAN as WiFi; stale
+# default routes via vmbr0 break `ping -I wlan` until the NAT pivot is applied.
+ensure_wifi_default_route() {
+  local iface="$1"
+  local gw
+  gw="$(wifi_default_gateway "$iface")"
+  if [[ -z "$gw" ]]; then
+    gw="$(ip -4 route show default 2>/dev/null | awk -v d="$iface" '$0 ~ "dev " d {print $3; exit}')"
+  fi
+  if [[ -n "$gw" ]]; then
+    log "ensuring default route via ${gw} dev ${iface}..."
+    ip route replace default via "$gw" dev "$iface" metric 50 2>/dev/null || true
+  fi
+}
+
+drop_stale_vmbr0_default_route() {
+  ip -4 route show default dev vmbr0 2>/dev/null | while read -r _ _ gw _ _ _; do
+    [[ -n "$gw" ]] || continue
+    log "removing stale default route via ${gw} dev vmbr0..."
+    ip route del default via "$gw" dev vmbr0 2>/dev/null || true
+  done
+}
+
+warn_before_vmbr0_pivot() {
+  local logf=/var/log/attackrangelocal-wifi-pivot.log
+  local ts_host reconnect
+  ts_host="$(hostname -s 2>/dev/null || hostname)"
+  if command -v tailscale >/dev/null 2>&1 \
+    && tailscale status --json 2>/dev/null | grep -q '"BackendState":"Running"'; then
+    reconnect="Reconnect via Tailscale:
+    tailscale status | grep -i ${ts_host}
+    ssh root@${ts_host}"
+  else
+    reconnect="Tailscale is not up yet (normal during first-boot WiFi pivot).
+    Use the LOCAL CONSOLE on this machine until first-boot reaches install-tailscale."
+  fi
+  cat >&2 <<EOF
+
+========================================================================
+  SSH WILL DROP when vmbr0 moves to ${NAT_GATEWAY} (internal NAT bridge).
+
+  ${reconnect}
+
+  Pivot progress: ${logf}
+========================================================================
+
+EOF
+  sleep 3
+}
+
+apply_vmbr0_nat() {
+  local logf=/var/log/attackrangelocal-wifi-pivot.log
+  warn_before_vmbr0_pivot
+  {
+    log "=== vmbr0 NAT pivot started $(date -u +%FT%TZ) ==="
+    reconfigure_vmbr0_for_nat
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-attackrangelocal-forward.conf
+    sysctl -p /etc/sysctl.d/99-attackrangelocal-forward.conf >/dev/null
+    log "applying vmbr0 NAT config..."
+    if command -v ifreload >/dev/null 2>&1; then
+      ifreload -a || log "WARN: ifreload reported errors (continuing)"
+    else
+      ifdown vmbr0 2>/dev/null || true
+      ifup vmbr0
+    fi
+    drop_stale_vmbr0_default_route
+    ensure_wifi_default_route "$WIFI_INTERFACE"
+    log "=== vmbr0 NAT pivot finished $(date -u +%FT%TZ) ==="
+  } 2>&1 | tee -a "$logf"
+}
+
+wifi_scan_sees_ssid() {
+  local iface="$1" ssid="$2"
+  iw dev "$iface" scan 2>/dev/null | grep -Fq "SSID: ${ssid}"
+}
+
+dump_wifi_diagnostics() {
+  local iface="$1"
+  echo "---- WiFi diagnostics (${iface}) ----" >&2
+  rfkill list >&2 || true
+  iw dev "$iface" link >&2 || true
+  ip -4 addr show dev "$iface" >&2 || true
+  wpa_cli -i "$iface" status >&2 || true
+  journalctl -u "wpa_supplicant@${iface}" --no-pager -n 25 >&2 || \
+    journalctl -u wpa_supplicant --no-pager -n 25 >&2 || true
+  dmesg 2>/dev/null | grep -iE 'iwlwifi|firmware|'"${iface}" | tail -15 >&2 || true
+}
+
+bring_up_wifi_interface() {
+  local iface="$1" wpa_conf="$2"
+
+  log "preparing ${iface} (driver, rfkill, link up)..."
+  modprobe iwlwifi 2>/dev/null || true
+  rfkill unblock all || true
+  ip link set "$iface" up 2>/dev/null || true
+
+  log "scanning for SSID '${WIFI_SSID}' (10s)..."
+  if ! timeout 12 iw dev "$iface" scan >/dev/null 2>&1; then
+    log "WARN: scan failed — continuing anyway"
+  elif ! wifi_scan_sees_ssid "$iface" "$WIFI_SSID"; then
+    log "WARN: SSID '${WIFI_SSID}' not seen in scan (wrong name, 5GHz-only, or regdomain?)"
+    iw dev "$iface" scan 2>/dev/null | grep -E 'SSID:|signal:' | head -20 >&2 || true
+  else
+    log "SSID '${WIFI_SSID}' visible in scan"
+  fi
+
+  log "starting wpa_supplicant for ${iface}..."
+  ifdown "$iface" 2>/dev/null || true
+  pkill -f "wpa_supplicant.*${iface}" 2>/dev/null || true
+  systemctl stop "wpa_supplicant@${iface}" 2>/dev/null || true
+
+  if systemctl list-unit-files "wpa_supplicant@${iface}.service" &>/dev/null; then
+    systemctl enable "wpa_supplicant@${iface}" >/dev/null 2>&1 || true
+    systemctl start "wpa_supplicant@${iface}" 2>&1 || \
+      wpa_supplicant -B -i "$iface" -c "$wpa_conf" -D nl80211,wext
+  else
+    wpa_supplicant -B -i "$iface" -c "$wpa_conf" -D nl80211,wext
+  fi
+
+  log "requesting DHCP on ${iface}..."
+  ifup "$iface" 2>&1 || log "WARN: ifup ${iface} reported errors"
+
+  local i state ip
+  for i in $(seq 1 45); do
+    state="$(wifi_wpa_state "$iface")"
+    ip="$(wifi_ipv4 "$iface")"
+    if [[ "$state" == "COMPLETED" && -n "$ip" ]]; then
+      log "associated; wpa_state=${state} ip=${ip}"
+      return 0
+    fi
+    if [[ "$state" == "COMPLETED" && -z "$ip" ]]; then
+      log "associated but no DHCP yet — running dhclient..."
+      dhclient -v "$iface" 2>&1 | tail -5 || true
+      ip="$(wifi_ipv4 "$iface")"
+      [[ -n "$ip" ]] && return 0
+    fi
+    if (( i % 5 == 0 )); then
+      log "still connecting (${i}/45): wpa_state=${state:-unknown} ip=${ip:-none}"
+    fi
+    sleep 2
+  done
+  return 1
+}
 
 # shellcheck source=lib/ensure-debian-apt.sh
 source "${SCRIPT_DIR}/lib/ensure-debian-apt.sh"
@@ -108,18 +283,81 @@ PYEOF
 
 backup_interfaces
 
+# WiFi is already associated (wpa_state=COMPLETED) but NAT not applied yet.
+if [[ "${WIFI_FINISH_ONLY:-}" == "1" ]]; then
+  if [[ -z "$WIFI_INTERFACE" ]]; then
+    WIFI_INTERFACE="$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2; exit}')"
+  fi
+  [[ -n "$WIFI_INTERFACE" ]] || fail "WIFI_FINISH_ONLY set but no WiFi interface found"
+
+  if ! ip -4 -o addr show dev "$WIFI_INTERFACE" 2>/dev/null | grep -q inet; then
+    log "WiFi associated but no IPv4 — running dhclient on ${WIFI_INTERFACE}..."
+    dhclient -v "$WIFI_INTERFACE" 2>&1 | tail -10 || true
+  fi
+
+  [[ -n "$(wifi_ipv4 "$WIFI_INTERFACE")" ]] || fail "WiFi has no IPv4 address after dhclient"
+
+  # vmbr0 may still be on the same LAN (e.g. 192.168.4.0/22) as WiFi DHCP.
+  # ping -I wlan to 1.1.1.1 often fails until vmbr0 moves to the NAT subnet.
+  if wifi_uplink_ready "$WIFI_INTERFACE"; then
+    log "WiFi L3 OK (gateway or internet reachable on ${WIFI_INTERFACE})"
+  else
+    log "WARN: WiFi has IP but pre-NAT ping failed — continuing to vmbr0 NAT pivot"
+  fi
+  log "applying vmbr0 NAT through ${WIFI_INTERFACE}..."
+  apply_vmbr0_nat
+
+  if ! ping -c1 -W5 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
+    dump_wifi_diagnostics "${WIFI_INTERFACE}"
+    fail "WiFi cannot reach 1.1.1.1 after vmbr0 NAT pivot"
+  fi
+  log "WiFi internet verified on ${WIFI_INTERFACE}"
+  if [[ "${WIFI_DISABLE_WIRED_AFTER_BOOT,,}" == "true" ]]; then
+    log "looking for wired interfaces to disable..."
+    for nic in $(ls /sys/class/net 2>/dev/null); do
+      case "$nic" in
+        lo|vmbr*|"${WIFI_INTERFACE}") continue ;;
+        en*|eth*|enp*|eno*|enx*)
+          if [[ -e "/sys/class/net/$nic/wireless" ]]; then continue; fi
+          log "disabling wired interface: $nic"
+          ifdown "$nic" 2>/dev/null || true
+          ip link set "$nic" down 2>/dev/null || true
+          ;;
+      esac
+    done
+  fi
+  log "persisting iptables rules via netfilter-persistent..."
+  mkdir -p /etc/iptables
+  iptables-save  > /etc/iptables/rules.v4
+  ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+  systemctl enable netfilter-persistent >/dev/null 2>&1 || true
+  log "WiFi uplink configured (finish-only)."
+  log "  interface: ${WIFI_INTERFACE}"
+  log "  NAT:       ${NAT_SUBNET} -> ${WIFI_INTERFACE} (MASQUERADE)"
+  log "  vmbr0:     ${NAT_GATEWAY}"
+  exit 0
+fi
+
 # ---------- 1. Install firmware + tools (over the WIRED uplink) ----------
-log "installing wpa_supplicant + non-free firmware (apt over wired)..."
+log "installing wpa_supplicant + WiFi firmware (apt over wired)..."
 ensure_debian_bookworm_apt
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  wpasupplicant wireless-tools iw rfkill iptables-persistent \
-  firmware-iwlwifi firmware-realtek firmware-misc-nonfree \
-  firmware-atheros firmware-brcm80211 || \
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  wpasupplicant wireless-tools iw rfkill iptables-persistent \
-  pve-firmware || \
-  fail "apt install failed — WiFi firmware not pulled. Wired uplink working?"
+
+WIFI_APT_PKGS=(wpasupplicant wireless-tools iw rfkill iptables-persistent)
+if [[ -f /usr/bin/pveversion ]]; then
+  # On Proxmox, Debian firmware-* metapackages can conflict with proxmox-ve
+  # and trigger pve-apt-hook aborts. pve-firmware already bundles iwlwifi etc.
+  log "Proxmox detected — installing pve-firmware (not Debian firmware metapackages)..."
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    "${WIFI_APT_PKGS[@]}" pve-firmware || \
+    fail "apt install failed — WiFi firmware not pulled. Wired uplink working?"
+else
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    "${WIFI_APT_PKGS[@]}" \
+    firmware-iwlwifi firmware-realtek firmware-misc-nonfree \
+    firmware-atheros firmware-brcm80211 || \
+    fail "apt install failed — WiFi firmware not pulled. Wired uplink working?"
+fi
 
 # ---------- 2. Unblock the radio + set regdomain ----------
 log "unblocking rfkill + setting regdomain to ${WIFI_COUNTRY}..."
@@ -146,13 +384,16 @@ country=${WIFI_COUNTRY}
 
 EOF
 wpa_passphrase "${WIFI_SSID}" "${WIFI_PASSWORD}" >> "$WPA_CONF"
+if [[ "${WIFI_HIDDEN_SSID,,}" =~ ^(true|yes|y|1)$ ]]; then
+  echo "    scan_ssid=1" >> "$WPA_CONF"
+fi
 chmod 600 "$WPA_CONF"
 
 # ---------- 5. Configure WiFi in interfaces.d (wired/vmbr0 left alone for now) ----------
 log "writing /etc/network/interfaces.d/wifi..."
 cat > /etc/network/interfaces.d/wifi <<EOF
 # Generated by scripts/setup-wifi-uplink.sh
-auto ${WIFI_INTERFACE}
+allow-hotplug ${WIFI_INTERFACE}
 iface ${WIFI_INTERFACE} inet dhcp
     wpa-conf ${WPA_CONF}
     metric 50
@@ -160,41 +401,38 @@ EOF
 
 # ---------- 6. Bring up WiFi ONLY — do not touch vmbr0 until WiFi works ----------
 log "bringing up ${WIFI_INTERFACE} (wired/vmbr0 unchanged)..."
-# ifupdown2 rejects `ifreload -a` together with a per-interface arg.
-ifup "${WIFI_INTERFACE}" 2>&1 || log "WARN: ifup ${WIFI_INTERFACE} reported errors"
-systemctl restart "wpa_supplicant@${WIFI_INTERFACE}" 2>/dev/null || \
-  systemctl restart wpa_supplicant 2>/dev/null || true
+if ! bring_up_wifi_interface "${WIFI_INTERFACE}" "${WPA_CONF}"; then
+  dump_wifi_diagnostics "${WIFI_INTERFACE}"
+  fail "WiFi did not associate or get an IP. Wired/vmbr0 was NOT changed."
+fi
 
-# ---------- 7. Wait for WiFi to carry traffic before changing vmbr0 ----------
-log "waiting up to 120s for WiFi to provide connectivity..."
+# ---------- 7. Wait for WiFi L3 before changing vmbr0 ----------
+log "waiting up to 60s for WiFi L3 (gateway or internet on ${WIFI_INTERFACE})..."
 ok=0
-for i in $(seq 1 60); do
-  if ping -c1 -W2 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
+for i in $(seq 1 30); do
+  if wifi_uplink_ready "${WIFI_INTERFACE}"; then
     ok=1; break
   fi
   sleep 2
 done
 if [[ $ok -eq 0 ]]; then
-  echo "ERROR: WiFi never reached 1.1.1.1. Wired/vmbr0 was NOT changed." >&2
-  echo "  journalctl -u wpa_supplicant --no-pager | tail -30" >&2
-  echo "  iw ${WIFI_INTERFACE} link; ip addr show ${WIFI_INTERFACE}" >&2
-  echo "  wpa_cli -i ${WIFI_INTERFACE} status" >&2
-  exit 1
+  if [[ -n "$(wifi_ipv4 "$WIFI_INTERFACE")" ]]; then
+    log "WARN: WiFi has IP but pre-NAT ping failed (vmbr0 may share the LAN) — continuing to NAT pivot"
+  else
+    dump_wifi_diagnostics "${WIFI_INTERFACE}"
+    fail "WiFi has no IPv4. Wired/vmbr0 was NOT changed."
+  fi
 fi
 log "WiFi up. IP: $(ip -4 addr show "${WIFI_INTERFACE}" | awk '/inet /{print $2; exit}')"
 
 # ---------- 8. WiFi confirmed — now reconfigure vmbr0 for NAT ----------
-reconfigure_vmbr0_for_nat
-echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-attackrangelocal-forward.conf
-sysctl -p /etc/sysctl.d/99-attackrangelocal-forward.conf >/dev/null
+apply_vmbr0_nat
 
-log "applying vmbr0 NAT config..."
-if command -v ifreload >/dev/null 2>&1; then
-  ifreload -a || log "WARN: ifreload reported errors (continuing)"
-else
-  ifdown vmbr0 2>/dev/null || true
-  ifup vmbr0
+if ! ping -c1 -W5 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
+  dump_wifi_diagnostics "${WIFI_INTERFACE}"
+  fail "WiFi cannot reach 1.1.1.1 after vmbr0 NAT pivot"
 fi
+log "WiFi internet verified on ${WIFI_INTERFACE}"
 
 # ---------- 9. Optionally tear down the install-time wired interface ----------
 if [[ "${WIFI_DISABLE_WIRED_AFTER_BOOT,,}" == "true" ]]; then
