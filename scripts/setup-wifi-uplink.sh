@@ -42,6 +42,11 @@ if ! grep -qE 'non-free-firmware|non-free' /etc/apt/sources.list; then
     /etc/apt/sources.list 2>/dev/null || true
 fi
 apt-get update -qq
+# Proxmox VE bundles WiFi firmware in pve-firmware; plain Debian
+# firmware-* packages are not in the PVE apt repos.
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  wpasupplicant wireless-tools iw rfkill iptables-persistent \
+  pve-firmware || \
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   wpasupplicant wireless-tools iw rfkill iptables-persistent \
   firmware-iwlwifi firmware-realtek firmware-misc-nonfree \
