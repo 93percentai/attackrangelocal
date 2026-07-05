@@ -194,6 +194,60 @@ PYEOF
 
 backup_interfaces
 
+# WiFi is already associated (wpa_state=COMPLETED) but NAT not applied yet.
+if [[ "${WIFI_FINISH_ONLY:-}" == "1" ]]; then
+  if [[ -z "$WIFI_INTERFACE" ]]; then
+    WIFI_INTERFACE="$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2; exit}')"
+  fi
+  [[ -n "$WIFI_INTERFACE" ]] || fail "WIFI_FINISH_ONLY set but no WiFi interface found"
+
+  if ! ip -4 -o addr show dev "$WIFI_INTERFACE" 2>/dev/null | grep -q inet; then
+    log "WiFi associated but no IPv4 — running dhclient on ${WIFI_INTERFACE}..."
+    dhclient -v "$WIFI_INTERFACE" 2>&1 | tail -10 || true
+  fi
+
+  if ! ping -c1 -W3 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
+    dump_wifi_diagnostics "${WIFI_INTERFACE}"
+    fail "WiFi has no working route to 1.1.1.1"
+  fi
+  log "WiFi uplink verified on ${WIFI_INTERFACE} — applying vmbr0 NAT only..."
+
+  reconfigure_vmbr0_for_nat
+  echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-attackrangelocal-forward.conf
+  sysctl -p /etc/sysctl.d/99-attackrangelocal-forward.conf >/dev/null
+  log "applying vmbr0 NAT config..."
+  if command -v ifreload >/dev/null 2>&1; then
+    ifreload -a || log "WARN: ifreload reported errors (continuing)"
+  else
+    ifdown vmbr0 2>/dev/null || true
+    ifup vmbr0
+  fi
+  if [[ "${WIFI_DISABLE_WIRED_AFTER_BOOT,,}" == "true" ]]; then
+    log "looking for wired interfaces to disable..."
+    for nic in $(ls /sys/class/net 2>/dev/null); do
+      case "$nic" in
+        lo|vmbr*|"${WIFI_INTERFACE}") continue ;;
+        en*|eth*|enp*|eno*|enx*)
+          if [[ -e "/sys/class/net/$nic/wireless" ]]; then continue; fi
+          log "disabling wired interface: $nic"
+          ifdown "$nic" 2>/dev/null || true
+          ip link set "$nic" down 2>/dev/null || true
+          ;;
+      esac
+    done
+  fi
+  log "persisting iptables rules via netfilter-persistent..."
+  mkdir -p /etc/iptables
+  iptables-save  > /etc/iptables/rules.v4
+  ip6tables-save > /etc/iptables/rules.v6 2>/dev/null || true
+  systemctl enable netfilter-persistent >/dev/null 2>&1 || true
+  log "WiFi uplink configured (finish-only)."
+  log "  interface: ${WIFI_INTERFACE}"
+  log "  NAT:       ${NAT_SUBNET} -> ${WIFI_INTERFACE} (MASQUERADE)"
+  log "  vmbr0:     ${NAT_GATEWAY}"
+  exit 0
+fi
+
 # ---------- 1. Install firmware + tools (over the WIRED uplink) ----------
 log "installing wpa_supplicant + WiFi firmware (apt over wired)..."
 ensure_debian_bookworm_apt
