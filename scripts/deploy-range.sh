@@ -17,6 +17,10 @@ fi
 
 set -a; source "$ENV_FILE"; set +a
 
+# shellcheck source=scripts/lib/ludus-env.sh
+source "${REPO_ROOT}/scripts/lib/ludus-env.sh"
+source_ludus_env
+
 # RANGE_MODE picks which template to render. Default = full for backward
 # compatibility with .env files that pre-date minimal mode.
 RANGE_MODE="${RANGE_MODE:-full}"

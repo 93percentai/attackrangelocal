@@ -11,6 +11,10 @@ STATUS_FILE=/var/lib/ludus-bootstrap/status
 
 write_status() { echo "$1" > "$STATUS_FILE" 2>/dev/null || true; }
 
+# shellcheck source=scripts/lib/ludus-env.sh
+source "${REPO_ROOT}/scripts/lib/ludus-env.sh"
+source_ludus_env
+
 if ! command -v ludus >/dev/null 2>&1; then
   echo "ludus CLI not found — run scripts/bootstrap-ludus.sh first" >&2
   exit 1
