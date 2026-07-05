@@ -136,22 +136,23 @@ ask() {
 
   printf "\n${BOLD}%s${RST}  ${DIM}(\$%s)${RST}\n" "$name" "$var"
   printf "%s\n" "$desc" | sed 's/^/  /'
+  if [[ -n "$current" ]]; then
+    printf "  ${DIM}Default: %s${RST}\n" "$current"
+  else
+    printf "  ${DIM}No default; enter a value.${RST}\n"
+  fi
+  if [[ "$kind" == "secret" ]]; then
+    note "Input is visible while you type so you can verify passwords and API keys."
+  fi
 
   while :; do
-    if [[ "$kind" == "secret" ]]; then
-      local shown
-      if [[ -n "$current" ]]; then shown="(unchanged)"; else shown="(empty)"; fi
-      printf "  ${CYAN}>${RST} %s: " "$shown"
-      read -rs input
-      echo
-      [[ -z "$input" ]] && input="$current"
+    if [[ -n "$current" ]]; then
+      printf "  ${CYAN}>${RST} Enter value, or press Enter to keep default: "
     else
-      local hint
-      if [[ -n "$current" ]]; then hint="[${current}]"; else hint=""; fi
-      printf "  ${CYAN}>${RST} %s " "$hint"
-      read -r input
-      [[ -z "$input" ]] && input="$current"
+      printf "  ${CYAN}>${RST} Enter value: "
     fi
+    read -r input
+    [[ -z "$input" ]] && input="$current"
 
     if [[ -n "$validator" ]] && ! "$validator" "$input"; then
       continue
@@ -263,7 +264,8 @@ collect() {
   full     7 VMs (DC + 2 win members + splunk + ELASTIC + linux + kali)
            Needs ~30 GB RAM, 16 threads, 500 GB SSD.
   minimal  5 VMs (DC+server combined, win client, splunk, linux, kali)
-           Fits 16 GB RAM, 12 threads, 256 GB SSD. No Elastic; Splunk only." \
+           Fits 16 GB RAM, 12 threads, 256 GB SSD. No Elastic; Splunk only.
+Type exactly one of: full, minimal." \
     "${CURRENT[RANGE_MODE]:-full}" plain v_range_mode
 
   hdr "Required: range identity"
@@ -566,14 +568,13 @@ do_build() {
 banner() {
   cat <<'EOF'
 
-   __ __  ___ _____  ____ _      _____  ___   _   _   ___ ___ _    ___   __  __ _    _
-  /_\\_\\/ _ \_   _||  _ \ \    / / _ \/ _ \ | \ | | / __|_ _| |  / _ \ |  \/  | |  | |
- / _ \ _|    / | |  | | |/ /\ \/ / (_) |   /|  \| || (__ | || |_| (_) || |\/| | |__| |
-/_/ \_\__\_/  |_|  |_| |_/  \/\/ \___/|___/ |_|\_| \___|___|____\___/ |_|  |_|____|___|
+Attack Range Local
+Unattended ISO Build Wizard
 
 EOF
   info "${BOLD}attackrangelocal — unattended ISO build wizard${RST}"
   info "Repo: ${REPO_ROOT}"
+  info "Prompts show defaults. Press Enter to keep a default, or type a replacement."
 }
 
 banner
@@ -596,7 +597,7 @@ case "$MODE" in
     collect
     write_env
     echo
-    printf "${BOLD}Build the ISO now? [Y/n]${RST} "
+    printf "${BOLD}Build the ISO now?${RST} Type y to build, n to skip. ${DIM}Default: y${RST} "
     read -r yn
     case "${yn:-y}" in
       [Nn]*) info "Skipping build. Run '$0 --build-only' when ready." ;;
