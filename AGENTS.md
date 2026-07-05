@@ -6,11 +6,16 @@ This repo is primarily an **infrastructure/deployment toolkit** for running Splu
 Attack Range v5 on a local Proxmox box (Ludus + Ansible + shell scripts + an
 unattended ISO pipeline). The full product **cannot run in a cloud dev VM** — it
 needs bare-metal/nested Proxmox, 16–30 GB RAM, Tailscale credentials, and hours of
-provisioning. Do not attempt to run `scripts/deploy-range.sh`, the ISO wizard,
-Ludus, or Ansible playbooks here.
+provisioning. Do not attempt to run `scripts/deploy-range.sh`, Ludus, Ansible
+playbooks, or the generated ISO as a VM here.
 
-The **only component runnable in this environment is the Astro web UI** in `ui/`
-(Node 22). Everything below refers to it. See `docs/ui.md` for the full tour.
+The unattended ISO build pipeline can be exercised in Cursor Cloud when the
+required build tools and credentials are available. Building an ISO with
+`scripts/build-iso-wizard.sh` or `iso/build-iso.sh` is allowed; booting or
+validating the resulting ISO in a VM probably is not.
+
+The Astro web UI in `ui/` (Node 22) is also runnable in this environment.
+Everything below refers to it. See `docs/ui.md` for the full tour.
 
 ### Running the UI (dev loop)
 
