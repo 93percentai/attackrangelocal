@@ -28,19 +28,28 @@ if [[ ! -e /etc/pve ]]; then
   exit 1
 fi
 
-write_status proxmox-installed
-
-if command -v ludus >/dev/null 2>&1; then
-  echo "Ludus already installed: $(ludus version)"
-else
-  echo "Installing Ludus..."
-  # Upstream installer. Pinned via env var so first-boot.sh can lock the version.
-  : "${LUDUS_INSTALL_URL:=https://ludus.cloud/install}"
-  curl -fsS "$LUDUS_INSTALL_URL" | bash
+# Pick up operator secrets when re-run manually after first-boot.
+if [[ -f "${REPO_ROOT}/.env" ]]; then
+  set -a; # shellcheck disable=SC1091
+  source "${REPO_ROOT}/.env"; set +a
+elif [[ -f /var/lib/proxmox-firstboot/secrets.env ]]; then
+  set -a; # shellcheck disable=SC1091
+  source /var/lib/proxmox-firstboot/secrets.env; set +a
 fi
 
-# Wait for the Ludus API to come up.
+write_status proxmox-installed
+
+# shellcheck source=scripts/lib/ludus-unattended-install.sh
+source "${REPO_ROOT}/scripts/lib/ludus-unattended-install.sh"
+
+write_status ludus-installing
+run_ludus_unattended_install
+
+# Wait for the Ludus API to come up (short poll after install-status succeeds).
 for i in $(seq 1 60); do
+  # shellcheck source=scripts/lib/ludus-env.sh
+  source "${REPO_ROOT}/scripts/lib/ludus-env.sh"
+  source_ludus_env
   if ludus version >/dev/null 2>&1; then
     echo "Ludus API is up."
     break
@@ -48,6 +57,10 @@ for i in $(seq 1 60); do
   echo "Waiting for Ludus API ($i/60)..."
   sleep 5
 done
+
+# shellcheck source=scripts/lib/ludus-env.sh
+source "${REPO_ROOT}/scripts/lib/ludus-env.sh"
+source_ludus_env
 if ! ludus version >/dev/null 2>&1; then
   echo "Ludus API never came up" >&2
   exit 1

@@ -11,6 +11,15 @@ STATUS_FILE=/var/lib/ludus-bootstrap/status
 
 write_status() { echo "$1" > "$STATUS_FILE" 2>/dev/null || true; }
 
+# shellcheck source=scripts/lib/ludus-env.sh
+source "${REPO_ROOT}/scripts/lib/ludus-env.sh"
+source_ludus_env
+
+if [[ -z "${LUDUS_API_KEY:-}" ]]; then
+  echo "LUDUS_API_KEY is not set — run scripts/bootstrap-ludus.sh first" >&2
+  exit 1
+fi
+
 if ! command -v ludus >/dev/null 2>&1; then
   echo "ludus CLI not found — run scripts/bootstrap-ludus.sh first" >&2
   exit 1
