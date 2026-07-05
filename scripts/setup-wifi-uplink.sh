@@ -111,17 +111,25 @@ PYEOF
 backup_interfaces
 
 # ---------- 1. Install firmware + tools (over the WIRED uplink) ----------
-log "installing wpa_supplicant + non-free firmware (apt over wired)..."
+log "installing wpa_supplicant + WiFi firmware (apt over wired)..."
 ensure_debian_bookworm_apt
 apt-get update -qq
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  wpasupplicant wireless-tools iw rfkill iptables-persistent \
-  firmware-iwlwifi firmware-realtek firmware-misc-nonfree \
-  firmware-atheros firmware-brcm80211 || \
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  wpasupplicant wireless-tools iw rfkill iptables-persistent \
-  pve-firmware || \
-  fail "apt install failed — WiFi firmware not pulled. Wired uplink working?"
+
+WIFI_APT_PKGS=(wpasupplicant wireless-tools iw rfkill iptables-persistent)
+if [[ -f /usr/bin/pveversion ]]; then
+  # On Proxmox, Debian firmware-* metapackages can conflict with proxmox-ve
+  # and trigger pve-apt-hook aborts. pve-firmware already bundles iwlwifi etc.
+  log "Proxmox detected — installing pve-firmware (not Debian firmware metapackages)..."
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    "${WIFI_APT_PKGS[@]}" pve-firmware || \
+    fail "apt install failed — WiFi firmware not pulled. Wired uplink working?"
+else
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    "${WIFI_APT_PKGS[@]}" \
+    firmware-iwlwifi firmware-realtek firmware-misc-nonfree \
+    firmware-atheros firmware-brcm80211 || \
+    fail "apt install failed — WiFi firmware not pulled. Wired uplink working?"
+fi
 
 # ---------- 2. Unblock the radio + set regdomain ----------
 log "unblocking rfkill + setting regdomain to ${WIFI_COUNTRY}..."
