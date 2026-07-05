@@ -40,6 +40,11 @@ source "${SCRIPT_DIR}/lib/ensure-debian-apt.sh"
 log "installing wpa_supplicant + non-free firmware (apt over wired)..."
 ensure_debian_bookworm_apt
 apt-get update -qq
+# Proxmox VE bundles WiFi firmware in pve-firmware; plain Debian
+# firmware-* packages are not in the PVE apt repos.
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  wpasupplicant wireless-tools iw rfkill iptables-persistent \
+  pve-firmware || \
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   wpasupplicant wireless-tools iw rfkill iptables-persistent \
   firmware-iwlwifi firmware-realtek firmware-misc-nonfree \
