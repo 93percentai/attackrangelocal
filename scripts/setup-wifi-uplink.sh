@@ -65,6 +65,61 @@ wifi_ipv4() {
   ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
 }
 
+wifi_default_gateway() {
+  ip -4 route show dev "$1" 2>/dev/null | awk '/^default/{print $3; exit}'
+}
+
+wifi_uplink_ready() {
+  local iface="$1"
+  local gw
+  gw="$(wifi_default_gateway "$iface")"
+  if ping -c1 -W3 -I "$iface" 1.1.1.1 >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -n "$gw" ]] && ping -c1 -W3 -I "$iface" "$gw" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# vmbr0 may still be the install-time DHCP bridge on the same LAN as WiFi; stale
+# default routes via vmbr0 break `ping -I wlan` until the NAT pivot is applied.
+ensure_wifi_default_route() {
+  local iface="$1"
+  local gw
+  gw="$(wifi_default_gateway "$iface")"
+  if [[ -z "$gw" ]]; then
+    gw="$(ip -4 route show default 2>/dev/null | awk -v d="$iface" '$0 ~ "dev " d {print $3; exit}')"
+  fi
+  if [[ -n "$gw" ]]; then
+    log "ensuring default route via ${gw} dev ${iface}..."
+    ip route replace default via "$gw" dev "$iface" metric 50 2>/dev/null || true
+  fi
+}
+
+drop_stale_vmbr0_default_route() {
+  ip -4 route show default dev vmbr0 2>/dev/null | while read -r _ _ gw _ _ _; do
+    [[ -n "$gw" ]] || continue
+    log "removing stale default route via ${gw} dev vmbr0..."
+    ip route del default via "$gw" dev vmbr0 2>/dev/null || true
+  done
+}
+
+apply_vmbr0_nat() {
+  reconfigure_vmbr0_for_nat
+  echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-attackrangelocal-forward.conf
+  sysctl -p /etc/sysctl.d/99-attackrangelocal-forward.conf >/dev/null
+  log "applying vmbr0 NAT config..."
+  if command -v ifreload >/dev/null 2>&1; then
+    ifreload -a || log "WARN: ifreload reported errors (continuing)"
+  else
+    ifdown vmbr0 2>/dev/null || true
+    ifup vmbr0
+  fi
+  drop_stale_vmbr0_default_route
+  ensure_wifi_default_route "$WIFI_INTERFACE"
+}
+
 wifi_scan_sees_ssid() {
   local iface="$1" ssid="$2"
   iw dev "$iface" scan 2>/dev/null | grep -Fq "SSID: ${ssid}"
@@ -206,22 +261,23 @@ if [[ "${WIFI_FINISH_ONLY:-}" == "1" ]]; then
     dhclient -v "$WIFI_INTERFACE" 2>&1 | tail -10 || true
   fi
 
-  if ! ping -c1 -W3 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
-    dump_wifi_diagnostics "${WIFI_INTERFACE}"
-    fail "WiFi has no working route to 1.1.1.1"
-  fi
-  log "WiFi uplink verified on ${WIFI_INTERFACE} — applying vmbr0 NAT only..."
+  [[ -n "$(wifi_ipv4 "$WIFI_INTERFACE")" ]] || fail "WiFi has no IPv4 address after dhclient"
 
-  reconfigure_vmbr0_for_nat
-  echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-attackrangelocal-forward.conf
-  sysctl -p /etc/sysctl.d/99-attackrangelocal-forward.conf >/dev/null
-  log "applying vmbr0 NAT config..."
-  if command -v ifreload >/dev/null 2>&1; then
-    ifreload -a || log "WARN: ifreload reported errors (continuing)"
+  # vmbr0 may still be on the same LAN (e.g. 192.168.4.0/22) as WiFi DHCP.
+  # ping -I wlan to 1.1.1.1 often fails until vmbr0 moves to the NAT subnet.
+  if wifi_uplink_ready "$WIFI_INTERFACE"; then
+    log "WiFi L3 OK (gateway or internet reachable on ${WIFI_INTERFACE})"
   else
-    ifdown vmbr0 2>/dev/null || true
-    ifup vmbr0
+    log "WARN: WiFi has IP but pre-NAT ping failed — continuing to vmbr0 NAT pivot"
   fi
+  log "applying vmbr0 NAT through ${WIFI_INTERFACE}..."
+  apply_vmbr0_nat
+
+  if ! ping -c1 -W5 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
+    dump_wifi_diagnostics "${WIFI_INTERFACE}"
+    fail "WiFi cannot reach 1.1.1.1 after vmbr0 NAT pivot"
+  fi
+  log "WiFi internet verified on ${WIFI_INTERFACE}"
   if [[ "${WIFI_DISABLE_WIRED_AFTER_BOOT,,}" == "true" ]]; then
     log "looking for wired interfaces to disable..."
     for nic in $(ls /sys/class/net 2>/dev/null); do
@@ -313,33 +369,33 @@ if ! bring_up_wifi_interface "${WIFI_INTERFACE}" "${WPA_CONF}"; then
   fail "WiFi did not associate or get an IP. Wired/vmbr0 was NOT changed."
 fi
 
-# ---------- 7. Wait for WiFi to carry traffic before changing vmbr0 ----------
-log "waiting up to 60s for WiFi to pass ping test..."
+# ---------- 7. Wait for WiFi L3 before changing vmbr0 ----------
+log "waiting up to 60s for WiFi L3 (gateway or internet on ${WIFI_INTERFACE})..."
 ok=0
 for i in $(seq 1 30); do
-  if ping -c1 -W2 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
+  if wifi_uplink_ready "${WIFI_INTERFACE}"; then
     ok=1; break
   fi
   sleep 2
 done
 if [[ $ok -eq 0 ]]; then
-  dump_wifi_diagnostics "${WIFI_INTERFACE}"
-  fail "WiFi has an IP but cannot reach 1.1.1.1. Wired/vmbr0 was NOT changed."
+  if [[ -n "$(wifi_ipv4 "$WIFI_INTERFACE")" ]]; then
+    log "WARN: WiFi has IP but pre-NAT ping failed (vmbr0 may share the LAN) — continuing to NAT pivot"
+  else
+    dump_wifi_diagnostics "${WIFI_INTERFACE}"
+    fail "WiFi has no IPv4. Wired/vmbr0 was NOT changed."
+  fi
 fi
 log "WiFi up. IP: $(ip -4 addr show "${WIFI_INTERFACE}" | awk '/inet /{print $2; exit}')"
 
 # ---------- 8. WiFi confirmed — now reconfigure vmbr0 for NAT ----------
-reconfigure_vmbr0_for_nat
-echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-attackrangelocal-forward.conf
-sysctl -p /etc/sysctl.d/99-attackrangelocal-forward.conf >/dev/null
+apply_vmbr0_nat
 
-log "applying vmbr0 NAT config..."
-if command -v ifreload >/dev/null 2>&1; then
-  ifreload -a || log "WARN: ifreload reported errors (continuing)"
-else
-  ifdown vmbr0 2>/dev/null || true
-  ifup vmbr0
+if ! ping -c1 -W5 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
+  dump_wifi_diagnostics "${WIFI_INTERFACE}"
+  fail "WiFi cannot reach 1.1.1.1 after vmbr0 NAT pivot"
 fi
+log "WiFi internet verified on ${WIFI_INTERFACE}"
 
 # ---------- 9. Optionally tear down the install-time wired interface ----------
 if [[ "${WIFI_DISABLE_WIRED_AFTER_BOOT,,}" == "true" ]]; then

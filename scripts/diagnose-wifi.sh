@@ -33,6 +33,12 @@ iw dev "$IFACE" link || true
 echo
 ip -4 addr show dev "$IFACE" 2>/dev/null || true
 echo
+ip -4 route show
+echo
+ip -4 route show dev vmbr0 2>/dev/null || true
+echo
+ping -c2 -W3 -I "$IFACE" 1.1.1.1 2>&1 || true
+echo
 wpa_cli -i "$IFACE" status 2>/dev/null || echo "wpa_cli failed"
 echo
 if [[ -n "${WIFI_SSID:-}" ]]; then

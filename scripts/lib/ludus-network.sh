@@ -72,7 +72,11 @@ render_ludus_server_config() {
   node="${LUDUS_PROXMOX_NODE:-$(hostname -s)}"
   pool="${LUDUS_PROXMOX_VM_STORAGE_POOL:-$(detect_ludus_storage_pool)}"
   nat="$(detect_ludus_nat_interface)"
-  db_key="${LUDUS_DATABASE_ENCRYPTION_KEY:-$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 32)}"
+  db_key="${LUDUS_DATABASE_ENCRYPTION_KEY:-$(generate_ludus_database_encryption_key)}"
+  if [[ ${#db_key} -ne 32 ]]; then
+    echo "database_encryption_key must be exactly 32 characters (got ${#db_key})" >&2
+    return 1
+  fi
 
   if [[ -z "$ip" || -z "$gateway" ]]; then
     echo "Could not detect Ludus network settings (iface=${iface}, ip=${ip:-empty}, gateway=${gateway:-empty})" >&2
@@ -122,8 +126,10 @@ ensure_ludus_server_config() {
     echo "Replacing incomplete Ludus config (backup: ${config_path}.bak-attackrangelocal)"
   fi
 
-  if [[ -n "$existing_key" ]]; then
+  if [[ -n "$existing_key" && ${#existing_key} -eq 32 ]]; then
     export LUDUS_DATABASE_ENCRYPTION_KEY="$existing_key"
+  elif [[ -n "$existing_key" ]]; then
+    echo "WARN: database_encryption_key in ${config_path} is ${#existing_key} chars; generating a new 32-char key" >&2
   fi
 
   render_ludus_server_config >"$config_path"
