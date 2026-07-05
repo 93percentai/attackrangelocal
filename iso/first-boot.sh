@@ -121,11 +121,19 @@ if [[ "${WIFI_ENABLE_NORM,,}" =~ ^(true|yes|y|1)$ ]]; then
 
   if compgen -G "$FW_DIR/*.deb" > /dev/null; then
     echo "Installing $(ls "$FW_DIR"/*.deb | wc -l) firmware .deb(s) offline..."
+    # shellcheck source=scripts/lib/ensure-debian-apt.sh
+    source "$PAYLOAD_DIR/scripts/lib/ensure-debian-apt.sh"
+    ensure_debian_bookworm_apt
+    apt-get update -qq
     DEBIAN_FRONTEND=noninteractive dpkg -i "$FW_DIR"/*.deb || \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --fix-broken
   else
     echo "No bundled firmware found — falling back to apt over the current uplink."
     echo "(Make sure ethernet is still plugged in, or the WiFi setup will fail.)"
+    # shellcheck source=scripts/lib/ensure-debian-apt.sh
+    source "$PAYLOAD_DIR/scripts/lib/ensure-debian-apt.sh"
+    ensure_debian_bookworm_apt
+    apt-get update -qq
   fi
 
   phase setup-wifi-uplink

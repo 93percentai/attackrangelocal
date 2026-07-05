@@ -32,25 +32,21 @@ NAT_GATEWAY="${NAT_GATEWAY:-10.10.10.1/24}"
 log()  { echo "[$(date -u +%FT%TZ)] wifi: $*"; }
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/ensure-debian-apt.sh
+source "${SCRIPT_DIR}/lib/ensure-debian-apt.sh"
+
 # ---------- 1. Install firmware + tools (over the WIRED uplink) ----------
 log "installing wpa_supplicant + non-free firmware (apt over wired)..."
-# Enable non-free firmware on the Debian sources (Proxmox sources already
-# include pve-no-subscription which ships firmware-iwlwifi etc., but
-# we add the Debian sources as belt-and-suspenders).
-if ! grep -qE 'non-free-firmware|non-free' /etc/apt/sources.list; then
-  sed -i 's/^\(deb .*bookworm main\)$/\1 non-free-firmware non-free contrib/' \
-    /etc/apt/sources.list 2>/dev/null || true
-fi
+ensure_debian_bookworm_apt
 apt-get update -qq
-# Proxmox VE bundles WiFi firmware in pve-firmware; plain Debian
-# firmware-* packages are not in the PVE apt repos.
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  wpasupplicant wireless-tools iw rfkill iptables-persistent \
-  pve-firmware || \
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   wpasupplicant wireless-tools iw rfkill iptables-persistent \
   firmware-iwlwifi firmware-realtek firmware-misc-nonfree \
   firmware-atheros firmware-brcm80211 || \
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  wpasupplicant wireless-tools iw rfkill iptables-persistent \
+  pve-firmware || \
   fail "apt install failed — WiFi firmware not pulled. Wired uplink working?"
 
 # ---------- 2. Unblock the radio + set regdomain ----------
