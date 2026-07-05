@@ -26,9 +26,30 @@ detect_ludus_storage_pool() {
   echo "$pool"
 }
 
-# Prints a Ludus server config.yml on stdout. Override any field with LUDUS_PROXMOX_* env vars.
+detect_ludus_nat_interface() {
+  local nat="${LUDUS_NAT_INTERFACE:-vmbr1000}"
+  if command -v pvesh >/dev/null 2>&1; then
+    local node
+    node="$(hostname -s)"
+    if pvesh get "/nodes/${node}/network" --output-format json 2>/dev/null \
+      | grep -q '"iface":"vmbr1000"'; then
+      echo "WARN: vmbr1000 already exists on this host; set LUDUS_NAT_INTERFACE to a free vmbr name" >&2
+    fi
+  fi
+  echo "$nat"
+}
+
+ludus_config_is_complete() {
+  local config_path="$1"
+  [[ -f "$config_path" ]] || return 1
+  grep -q '^ludus_nat_interface:' "$config_path" \
+    && grep -q '^license_key:' "$config_path" \
+    && grep -q '^database_encryption_key:' "$config_path"
+}
+
+# Prints a Ludus 2.x server config.yml on stdout. Override any field with LUDUS_* env vars.
 render_ludus_server_config() {
-  local iface ip gateway prefix netmask node pool
+  local iface ip gateway prefix netmask node pool nat db_key
 
   iface="${LUDUS_PROXMOX_INTERFACE:-$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')}"
   [[ -z "$iface" ]] && iface=vmbr0
@@ -40,6 +61,8 @@ render_ludus_server_config() {
   netmask="${LUDUS_PROXMOX_NETMASK:-$(cidr_to_netmask "$prefix")}"
   node="${LUDUS_PROXMOX_NODE:-$(hostname -s)}"
   pool="${LUDUS_PROXMOX_VM_STORAGE_POOL:-$(detect_ludus_storage_pool)}"
+  nat="$(detect_ludus_nat_interface)"
+  db_key="${LUDUS_DATABASE_ENCRYPTION_KEY:-$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 32)}"
 
   if [[ -z "$ip" || -z "$gateway" ]]; then
     echo "Could not detect Ludus network settings (iface=${iface}, ip=${ip:-empty}, gateway=${gateway:-empty})" >&2
@@ -51,6 +74,7 @@ render_ludus_server_config() {
 ---
 proxmox_node: ${node}
 proxmox_invalid_cert: true
+proxmox_url: https://127.0.0.1:8006
 proxmox_interface: ${iface}
 proxmox_local_ip: ${ip}
 proxmox_public_ip: ${ip}
@@ -59,5 +83,38 @@ proxmox_netmask: ${netmask}
 proxmox_vm_storage_pool: ${pool}
 proxmox_vm_storage_format: qcow2
 proxmox_iso_storage_pool: ${pool}
+ludus_nat_interface: ${nat}
+prevent_user_ansible_add: false
+license_key: community
+expose_admin_port: false
+port: 8080
+admin_port: 8081
+data_directory: /opt/ludus/db
+database_encryption_key: ${db_key}
+wireguard_port: 51820
+max_log_history: 100
+register_default_source: true
+sync_sources_on_startup: true
 EOF
+}
+
+ensure_ludus_server_config() {
+  local config_path="$1"
+  local existing_key=""
+
+  if ludus_config_is_complete "$config_path"; then
+    return 0
+  fi
+
+  if [[ -f "$config_path" ]]; then
+    existing_key="$(awk -F': ' '/^database_encryption_key:/{print $2; exit}' "$config_path" | tr -d "'\" ")"
+    cp -a "$config_path" "${config_path}.bak-attackrangelocal"
+    echo "Replacing incomplete Ludus config (backup: ${config_path}.bak-attackrangelocal)"
+  fi
+
+  if [[ -n "$existing_key" ]]; then
+    export LUDUS_DATABASE_ENCRYPTION_KEY="$existing_key"
+  fi
+
+  render_ludus_server_config >"$config_path"
 }

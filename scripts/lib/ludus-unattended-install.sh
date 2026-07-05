@@ -126,9 +126,9 @@ install_ludus_server_unattended() {
     echo "Downloaded Ludus server ${tag}"
   fi
 
-  if [[ ! -f "${workdir}/config.yml" ]]; then
-    echo "Writing ${workdir}/config.yml from host network detection..."
-    render_ludus_server_config >"${workdir}/config.yml"
+  if [[ ! -f "${workdir}/config.yml" ]] || ! ludus_config_is_complete "${workdir}/config.yml"; then
+    echo "Writing complete Ludus 2.x config at ${workdir}/config.yml..."
+    ensure_ludus_server_config "${workdir}/config.yml"
   fi
 
   echo "Starting Ludus server install via ludus-server --no-prompt..."
