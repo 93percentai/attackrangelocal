@@ -17,7 +17,9 @@
 #   WIFI_DISABLE_WIRED_AFTER_BOOT  true = stop the install-time wired NIC
 #
 # Idempotent: re-running fixes a partial setup but does not break a
-# working one. Exit non-zero on the first hard error.
+# working one. After a failed first-boot WiFi pivot, prefer:
+#   scripts/repair-wifi-uplink.sh
+# Exit non-zero on the first hard error.
 
 set -euo pipefail
 
