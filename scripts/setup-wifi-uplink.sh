@@ -160,13 +160,10 @@ EOF
 
 # ---------- 6. Bring up WiFi ONLY — do not touch vmbr0 until WiFi works ----------
 log "bringing up ${WIFI_INTERFACE} (wired/vmbr0 unchanged)..."
-if command -v ifreload >/dev/null 2>&1; then
-  ifreload -a -u "${WIFI_INTERFACE}" 2>&1 || ifup "${WIFI_INTERFACE}" 2>&1 || \
-    log "WARN: ifup ${WIFI_INTERFACE} reported errors"
-else
-  ifup "${WIFI_INTERFACE}" 2>&1 || log "WARN: ifup ${WIFI_INTERFACE} reported errors"
-fi
-systemctl restart wpa_supplicant 2>/dev/null || true
+# ifupdown2 rejects `ifreload -a` together with a per-interface arg.
+ifup "${WIFI_INTERFACE}" 2>&1 || log "WARN: ifup ${WIFI_INTERFACE} reported errors"
+systemctl restart "wpa_supplicant@${WIFI_INTERFACE}" 2>/dev/null || \
+  systemctl restart wpa_supplicant 2>/dev/null || true
 
 # ---------- 7. Wait for WiFi to carry traffic before changing vmbr0 ----------
 log "waiting up to 120s for WiFi to provide connectivity..."
