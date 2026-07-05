@@ -105,19 +105,46 @@ drop_stale_vmbr0_default_route() {
   done
 }
 
+warn_before_vmbr0_pivot() {
+  local logf=/var/log/attackrangelocal-wifi-pivot.log
+  local ts_host
+  ts_host="$(hostname -s 2>/dev/null || hostname)"
+  cat >&2 <<EOF
+
+========================================================================
+  SSH WILL DROP when vmbr0 moves to ${NAT_GATEWAY} (internal NAT bridge).
+
+  Reconnect via Tailscale from another machine on your tailnet:
+    tailscale status | grep -i ${ts_host}
+    ssh root@${ts_host}
+
+  Or use the local console on this machine.
+  Pivot progress: ${logf}
+========================================================================
+
+EOF
+  sleep 3
+}
+
 apply_vmbr0_nat() {
-  reconfigure_vmbr0_for_nat
-  echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-attackrangelocal-forward.conf
-  sysctl -p /etc/sysctl.d/99-attackrangelocal-forward.conf >/dev/null
-  log "applying vmbr0 NAT config..."
-  if command -v ifreload >/dev/null 2>&1; then
-    ifreload -a || log "WARN: ifreload reported errors (continuing)"
-  else
-    ifdown vmbr0 2>/dev/null || true
-    ifup vmbr0
-  fi
-  drop_stale_vmbr0_default_route
-  ensure_wifi_default_route "$WIFI_INTERFACE"
+  local logf=/var/log/attackrangelocal-wifi-pivot.log
+  warn_before_vmbr0_pivot
+  {
+    log "=== vmbr0 NAT pivot started $(date -u +%FT%TZ) ==="
+    reconfigure_vmbr0_for_nat
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-attackrangelocal-forward.conf
+    sysctl -p /etc/sysctl.d/99-attackrangelocal-forward.conf >/dev/null
+    log "applying vmbr0 NAT config..."
+    if command -v ifreload >/dev/null 2>&1; then
+      ifreload -a || log "WARN: ifreload reported errors (continuing)"
+    else
+      ifdown vmbr0 2>/dev/null || true
+      ifup vmbr0
+    fi
+    drop_stale_vmbr0_default_route
+    ensure_wifi_default_route "$WIFI_INTERFACE"
+    log "=== vmbr0 NAT pivot finished $(date -u +%FT%TZ) ==="
+  } 2>&1 | tee -a "$logf"
 }
 
 wifi_scan_sees_ssid() {

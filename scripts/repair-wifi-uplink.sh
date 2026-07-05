@@ -90,6 +90,8 @@ fi
 # WiFi associated but missing DHCP and/or NAT — do NOT restore wired or reset wpa.
 if [[ -n "$WIFI_IF" ]] && wifi_is_associated "$WIFI_IF"; then
   log "WiFi already associated to SSID — finishing DHCP + NAT only..."
+  log "NOTE: SSH over ethernet WILL drop when vmbr0 pivots to 10.10.10.1."
+  log "      Reconnect via Tailscale: ssh root@$(hostname -s 2>/dev/null || hostname)"
   [[ -f "$FINISH" ]] || fail "missing ${FINISH}"
   exec bash "$FINISH"
 fi
