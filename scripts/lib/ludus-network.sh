@@ -39,12 +39,22 @@ detect_ludus_nat_interface() {
   echo "$nat"
 }
 
+generate_ludus_database_encryption_key() {
+  # Ludus requires exactly 32 characters (see ludus-api config validation).
+  openssl rand -hex 16
+}
+
 ludus_config_is_complete() {
   local config_path="$1"
+  local db_key
+
   [[ -f "$config_path" ]] || return 1
-  grep -q '^ludus_nat_interface:' "$config_path" \
-    && grep -q '^license_key:' "$config_path" \
-    && grep -q '^database_encryption_key:' "$config_path"
+  grep -q '^ludus_nat_interface:' "$config_path" || return 1
+  grep -q '^license_key:' "$config_path" || return 1
+  grep -q '^database_encryption_key:' "$config_path" || return 1
+
+  db_key="$(awk -F': ' '/^database_encryption_key:/{print $2; exit}' "$config_path" | tr -d "'\" ")"
+  [[ ${#db_key} -eq 32 ]]
 }
 
 # Prints a Ludus 2.x server config.yml on stdout. Override any field with LUDUS_* env vars.
