@@ -16,7 +16,7 @@
 # first-boot from REPO_URL@REPO_REF for reproducible deploys.
 #
 # Logs to /var/log/attackrangelocal-firstboot.log (also visible via
-# `journalctl -u proxmox-firstboot`).
+# `journalctl -u proxmox-first-boot`).
 set -euo pipefail
 exec > >(tee -a /var/log/attackrangelocal-firstboot.log) 2>&1
 
@@ -39,6 +39,32 @@ phase() {
 
 phase wait-for-network
 until ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; do sleep 2; done
+
+# Fresh PVE installs default to enterprise.proxmox.com apt repos, which 401
+# without a subscription. first-boot needs working apt before git/Ludus/etc.
+ensure_pve_apt_no_subscription() {
+  local f
+  for f in /etc/apt/sources.list.d/pve-enterprise.list \
+           /etc/apt/sources.list.d/ceph.list; do
+    if [[ -f "$f" ]] && grep -qE '^[[:space:]]*deb[[:space:]]' "$f"; then
+      sed -i.bak-attackrange 's/^[[:space:]]*deb /# deb /' "$f"
+      echo "Disabled enterprise repo: $f"
+    fi
+  done
+  if [[ ! -f /etc/apt/sources.list.d/pve-no-subscription.list ]]; then
+    cat >/etc/apt/sources.list.d/pve-no-subscription.list <<'EOF'
+deb http://download.proxmox.com/debian/pve bookworm pve-no-subscription
+EOF
+    echo "Added pve-no-subscription apt source"
+  fi
+  if [[ ! -f /etc/apt/sources.list.d/ceph-no-subscription.list ]]; then
+    cat >/etc/apt/sources.list.d/ceph-no-subscription.list <<'EOF'
+deb http://download.proxmox.com/debian/ceph-quincy bookworm no-subscription
+EOF
+    echo "Added ceph no-subscription apt source"
+  fi
+}
+ensure_pve_apt_no_subscription
 
 phase install-git
 # Proxmox VE base image doesn't ship git; install it before cloning.
@@ -95,11 +121,19 @@ if [[ "${WIFI_ENABLE_NORM,,}" =~ ^(true|yes|y|1)$ ]]; then
 
   if compgen -G "$FW_DIR/*.deb" > /dev/null; then
     echo "Installing $(ls "$FW_DIR"/*.deb | wc -l) firmware .deb(s) offline..."
+    # shellcheck source=scripts/lib/ensure-debian-apt.sh
+    source "$PAYLOAD_DIR/scripts/lib/ensure-debian-apt.sh"
+    ensure_debian_bookworm_apt
+    apt-get update -qq
     DEBIAN_FRONTEND=noninteractive dpkg -i "$FW_DIR"/*.deb || \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --fix-broken
   else
     echo "No bundled firmware found — falling back to apt over the current uplink."
     echo "(Make sure ethernet is still plugged in, or the WiFi setup will fail.)"
+    # shellcheck source=scripts/lib/ensure-debian-apt.sh
+    source "$PAYLOAD_DIR/scripts/lib/ensure-debian-apt.sh"
+    ensure_debian_bookworm_apt
+    apt-get update -qq
   fi
 
   phase setup-wifi-uplink
@@ -169,4 +203,4 @@ phase range-up-continuous-sim-running
 echo "Range is fully up. Access Splunk at https://<RANGE_ID>-splunk:8000 over Tailscale."
 
 # Disable ourselves so we don't run again on the next boot.
-systemctl disable proxmox-firstboot.service || true
+systemctl disable proxmox-first-boot.service || true
