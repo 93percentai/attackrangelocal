@@ -94,7 +94,7 @@ if [[ -n "$WIFI_IF" ]]; then
   reset_stale_wifi_state "$WIFI_IF"
 fi
 
-[[ -x "$SETUP" ]] || fail "missing ${SETUP} — git pull /opt/attackrangelocal first"
+[[ -f "$SETUP" ]] || fail "missing ${SETUP} — run: cd ${REPO_ROOT} && git fetch origin && git pull"
 
 log "Running fixed setup-wifi-uplink.sh (keep ethernet plugged in until it finishes)..."
-exec bash "$SETUP"
+bash "$SETUP"
