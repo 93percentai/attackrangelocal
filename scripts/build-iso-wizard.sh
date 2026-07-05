@@ -233,9 +233,15 @@ v_iface_or_empty() {
   return 1
 }
 v_disk_list() {
+  local v="${1//$'\r'/}"
+  v="${v//$'\n'/}"
+  v="${v// /}"
   # TOML array literal with a single quoted device name.
-  if [[ "$1" =~ ^\[\".+\"\]$ ]]; then return 0; fi
-  err 'must be a TOML array like ["nvme0n1"] or ["sda"] — single disk only for ext4'
+  if [[ "$v" =~ ^\[\".+\"\]$ ]]; then return 0; fi
+  # Also accept bare device names; write_env will store the normalized form.
+  if [[ "$v" =~ ^[a-zA-Z0-9_.-]+$ ]]; then return 0; fi
+  if [[ "$v" =~ ^\[[a-zA-Z0-9_.-]+\]$ ]]; then return 0; fi
+  err 'must be a TOML array like ["nvme0n1"], ["sda"], or just nvme0n1'
   return 1
 }
 v_int_or_empty() {
@@ -485,6 +491,16 @@ write_env() {
              NOTIFY_WEBHOOK \
              SIM_EXCLUDE SIM_INTERVAL_MINUTES; do
       v="${ANSWERS[$k]:-${CURRENT[$k]:-${DEFAULTS[$k]:-}}}"
+      if [[ "$k" == DISK_DEVICE_LIST ]]; then
+        v="${v//$'\r'/}"
+        v="${v//$'\n'/}"
+        v="${v// /}"
+        if [[ "$v" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
+          v="[\"${v}\"]"
+        elif [[ "$v" =~ ^\[([a-zA-Z0-9_.-]+)\]$ ]]; then
+          v="[\"${BASH_REMATCH[1]}\"]"
+        fi
+      fi
       # Quote values containing spaces or special chars.
       if [[ "$v" =~ [[:space:]\"\'$#] ]]; then
         printf '%s="%s"\n' "$k" "${v//\"/\\\"}"
