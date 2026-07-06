@@ -81,6 +81,13 @@ if [[ -n "$WIFI_IF" ]]; then
   log "WiFi internet:       $(wifi_can_reach_internet "$WIFI_IF" && echo yes || echo no)"
 fi
 
+# Stranded: vmbr0 moved to NAT subnet and host has no working uplink.
+if ! host_can_reach_internet && vmbr0_is_nat_pivot && [[ -f "$BACKUP" ]]; then
+  log "Host offline after vmbr0 NAT pivot — restoring wired uplink from backup..."
+  bash "$RESTORE"
+  host_can_reach_internet || fail "wired restore did not bring back internet — use local console and check /etc/network/interfaces"
+fi
+
 # Already on WiFi NAT — nothing to do.
 if vmbr0_is_nat_pivot && [[ -n "$WIFI_IF" ]] && wifi_can_reach_internet "$WIFI_IF"; then
   log "WiFi NAT uplink already working."

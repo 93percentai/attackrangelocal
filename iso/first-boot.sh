@@ -137,6 +137,8 @@ if [[ "${WIFI_ENABLE_NORM,,}" =~ ^(true|yes|y|1)$ ]]; then
   fi
 
   phase setup-wifi-uplink
+  export ATTACKRANGELOCAL_FIRST_BOOT=1
+  export WIFI_DISABLE_WIRED_AFTER_BOOT=false
   bash "$PAYLOAD_DIR/scripts/setup-wifi-uplink.sh"
 fi
 

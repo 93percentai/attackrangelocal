@@ -31,10 +31,19 @@ if command -v ifreload >/dev/null 2>&1; then
   ifreload -a 2>&1 || true
 else
   for nic in $(ls /sys/class/net | grep -E '^(en|eth)'); do
+    ip link set "$nic" up 2>/dev/null || true
     ifup "$nic" 2>/dev/null || true
   done
   ifup vmbr0 2>/dev/null || true
 fi
+
+# Wired NIC may have been `ip link set down` by a failed WiFi pivot.
+for nic in $(ls /sys/class/net 2>/dev/null | grep -E '^(en|eth)'); do
+  [[ -e "/sys/class/net/$nic/wireless" ]] && continue
+  ip link set "$nic" up 2>/dev/null || true
+  ifup "$nic" 2>/dev/null || true
+done
+ifup vmbr0 2>/dev/null || true
 
 echo "Done. Test: ping -c2 1.1.1.1"
 ip -4 route show default 2>/dev/null || echo "(no default route — check gateway in /etc/network/interfaces)"

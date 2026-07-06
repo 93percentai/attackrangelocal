@@ -56,7 +56,34 @@ NAT_SUBNET="${NAT_SUBNET:-10.10.10.0/24}"
 NAT_GATEWAY="${NAT_GATEWAY:-10.10.10.1/24}"
 
 log()  { echo "[$(date -u +%FT%TZ)] wifi: $*"; }
-fail() { echo "ERROR: $*" >&2; exit 1; }
+VMBR0_PIVOT_APPLIED=0
+
+rollback_wired_uplink() {
+  [[ "$VMBR0_PIVOT_APPLIED" -eq 1 ]] || return 0
+  [[ -f "$INTERFACES_BACKUP" ]] || return 0
+  log "ROLLBACK: restoring pre-WiFi wired/vmbr0 from ${INTERFACES_BACKUP}..."
+  cp -a "$INTERFACES_BACKUP" /etc/network/interfaces
+  rm -f /etc/network/interfaces.d/wifi
+  if [[ -d "$INTERFACES_D_BACKUP" ]]; then
+    rm -rf /etc/network/interfaces.d
+    cp -a "$INTERFACES_D_BACKUP" /etc/network/interfaces.d
+  fi
+  if command -v ifreload >/dev/null 2>&1; then
+    ifreload -a 2>&1 || true
+  else
+    for nic in $(ls /sys/class/net 2>/dev/null | grep -E '^(en|eth)'); do
+      ifup "$nic" 2>/dev/null || true
+    done
+    ifup vmbr0 2>/dev/null || true
+  fi
+  VMBR0_PIVOT_APPLIED=0
+}
+
+fail() {
+  rollback_wired_uplink
+  echo "ERROR: $*" >&2
+  exit 1
+}
 
 wifi_wpa_state() {
   wpa_cli -i "$1" status 2>/dev/null | awk -F= '/^wpa_state=/{print $2; exit}'
@@ -96,6 +123,43 @@ ensure_wifi_default_route() {
     log "ensuring default route via ${gw} dev ${iface}..."
     ip route replace default via "$gw" dev "$iface" metric 50 2>/dev/null || true
   fi
+}
+
+disable_wired_nics() {
+  # Never tear down wired during unattended first-boot — operator may be stranded
+  # if WiFi fails after vmbr0 moves off the LAN bridge.
+  if [[ "${ATTACKRANGELOCAL_FIRST_BOOT:-}" == "1" ]]; then
+    log "first-boot: keeping wired NIC enabled (set WIFI_DISABLE_WIRED_AFTER_BOOT only after WiFi is proven)"
+    return 0
+  fi
+  if [[ "${WIFI_DISABLE_WIRED_AFTER_BOOT,,}" != "true" ]]; then
+    return 0
+  fi
+  log "looking for wired interfaces to disable..."
+  for nic in $(ls /sys/class/net 2>/dev/null); do
+    case "$nic" in
+      lo|vmbr*|"${WIFI_INTERFACE}") continue ;;
+      en*|eth*|enp*|eno*|enx*)
+        if [[ -e "/sys/class/net/$nic/wireless" ]]; then continue; fi
+        log "disabling wired interface: $nic"
+        ifdown "$nic" 2>/dev/null || true
+        ip link set "$nic" down 2>/dev/null || true
+        sed -i "/^auto $nic\b/,/^$/ s/^/# /" /etc/network/interfaces 2>/dev/null || true
+        sed -i "/^iface $nic\b/,/^[a-zA-Z]/ { /^[a-zA-Z]/!s/^/# / }" /etc/network/interfaces 2>/dev/null || true
+        ;;
+    esac
+  done
+}
+
+verify_wifi_internet() {
+  local iface="$1" i
+  for i in 1 2 3; do
+    if ping -c1 -W5 -I "$iface" 1.1.1.1 >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
 }
 
 drop_stale_vmbr0_default_route() {
@@ -150,6 +214,7 @@ apply_vmbr0_nat() {
     fi
     drop_stale_vmbr0_default_route
     ensure_wifi_default_route "$WIFI_INTERFACE"
+    VMBR0_PIVOT_APPLIED=1
     log "=== vmbr0 NAT pivot finished $(date -u +%FT%TZ) ==="
   } 2>&1 | tee -a "$logf"
 }
@@ -307,25 +372,12 @@ if [[ "${WIFI_FINISH_ONLY:-}" == "1" ]]; then
   log "applying vmbr0 NAT through ${WIFI_INTERFACE}..."
   apply_vmbr0_nat
 
-  if ! ping -c1 -W5 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
+  if ! verify_wifi_internet "${WIFI_INTERFACE}"; then
     dump_wifi_diagnostics "${WIFI_INTERFACE}"
     fail "WiFi cannot reach 1.1.1.1 after vmbr0 NAT pivot"
   fi
   log "WiFi internet verified on ${WIFI_INTERFACE}"
-  if [[ "${WIFI_DISABLE_WIRED_AFTER_BOOT,,}" == "true" ]]; then
-    log "looking for wired interfaces to disable..."
-    for nic in $(ls /sys/class/net 2>/dev/null); do
-      case "$nic" in
-        lo|vmbr*|"${WIFI_INTERFACE}") continue ;;
-        en*|eth*|enp*|eno*|enx*)
-          if [[ -e "/sys/class/net/$nic/wireless" ]]; then continue; fi
-          log "disabling wired interface: $nic"
-          ifdown "$nic" 2>/dev/null || true
-          ip link set "$nic" down 2>/dev/null || true
-          ;;
-      esac
-    done
-  fi
+  disable_wired_nics
   log "persisting iptables rules via netfilter-persistent..."
   mkdir -p /etc/iptables
   iptables-save  > /etc/iptables/rules.v4
@@ -428,29 +480,14 @@ log "WiFi up. IP: $(ip -4 addr show "${WIFI_INTERFACE}" | awk '/inet /{print $2;
 # ---------- 8. WiFi confirmed — now reconfigure vmbr0 for NAT ----------
 apply_vmbr0_nat
 
-if ! ping -c1 -W5 -I "${WIFI_INTERFACE}" 1.1.1.1 >/dev/null 2>&1; then
+if ! verify_wifi_internet "${WIFI_INTERFACE}"; then
   dump_wifi_diagnostics "${WIFI_INTERFACE}"
   fail "WiFi cannot reach 1.1.1.1 after vmbr0 NAT pivot"
 fi
 log "WiFi internet verified on ${WIFI_INTERFACE}"
 
 # ---------- 9. Optionally tear down the install-time wired interface ----------
-if [[ "${WIFI_DISABLE_WIRED_AFTER_BOOT,,}" == "true" ]]; then
-  log "looking for wired interfaces to disable..."
-  for nic in $(ls /sys/class/net 2>/dev/null); do
-    case "$nic" in
-      lo|vmbr*|"${WIFI_INTERFACE}") continue ;;
-      en*|eth*|enp*|eno*|enx*)
-        if [[ -e "/sys/class/net/$nic/wireless" ]]; then continue; fi
-        log "disabling wired interface: $nic"
-        ifdown "$nic" 2>/dev/null || true
-        ip link set "$nic" down 2>/dev/null || true
-        sed -i "/^auto $nic\b/,/^$/ s/^/# /" /etc/network/interfaces 2>/dev/null || true
-        sed -i "/^iface $nic\b/,/^[a-zA-Z]/ { /^[a-zA-Z]/!s/^/# / }" /etc/network/interfaces 2>/dev/null || true
-        ;;
-    esac
-  done
-fi
+disable_wired_nics
 
 # ---------- 10. Persist iptables rules across reboots ----------
 log "persisting iptables rules via netfilter-persistent..."
