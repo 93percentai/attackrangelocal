@@ -110,7 +110,7 @@ OR confirmed the open-port problem.
 
 Atomic Red Team includes techniques that — if pointed at the wrong
 network — could be misclassified as real attacks by your ISP, a bug
-bounty target, or a coffee shop wifi. With deny-by-default egress + only
+bounty target, or the network you happen to be on. With deny-by-default egress + only
 Tailscale-required ports open, the worst case is "Sysmon logs an
 attempted connection to 1.1.1.1:445 that never left the gateway".
 

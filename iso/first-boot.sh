@@ -63,49 +63,6 @@ if [[ -f "$SECRETS_FILE" ]]; then
   install -m 600 "$SECRETS_FILE" "$PAYLOAD_DIR/.env"
 fi
 
-# ---- Optional WiFi pivot ---------------------------------------------------
-# When WIFI_ENABLE=true, switch from the install-time wired uplink to a
-# WiFi STA + NAT setup BEFORE Tailscale joins. From here on, every phase
-# below talks to the internet via WiFi.
-WIFI_ENABLE_NORM="${WIFI_ENABLE:-false}"
-if [[ "${WIFI_ENABLE_NORM,,}" =~ ^(true|yes|y|1)$ ]]; then
-  phase install-wifi-firmware-offline
-  # iso/build-iso.sh staged firmware .debs onto the install ISO under
-  # /firmware/MANIFEST + /firmware/*.deb. If the install USB is still
-  # plugged in, mount it and dpkg -i them so WiFi works even if no wired
-  # uplink is available right now.
-  FW_DIR=/var/lib/proxmox-firstboot/firmware
-  mkdir -p "$FW_DIR"
-
-  if ! compgen -G "$FW_DIR/*.deb" > /dev/null; then
-    echo "Scanning block devices for the install ISO (looking for /firmware/MANIFEST)..."
-    MNT=$(mktemp -d)
-    for dev in $(lsblk -lpno NAME,TYPE | awk '$2=="rom"||$2=="part"{print $1}'); do
-      mount -o ro "$dev" "$MNT" 2>/dev/null || continue
-      if [[ -f "$MNT/firmware/MANIFEST" ]]; then
-        echo "  Found install media on $dev — copying firmware..."
-        cp "$MNT"/firmware/*.deb "$FW_DIR/" 2>/dev/null || true
-        umount "$MNT"
-        break
-      fi
-      umount "$MNT" 2>/dev/null || true
-    done
-    rmdir "$MNT" 2>/dev/null || true
-  fi
-
-  if compgen -G "$FW_DIR/*.deb" > /dev/null; then
-    echo "Installing $(ls "$FW_DIR"/*.deb | wc -l) firmware .deb(s) offline..."
-    DEBIAN_FRONTEND=noninteractive dpkg -i "$FW_DIR"/*.deb || \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --fix-broken
-  else
-    echo "No bundled firmware found — falling back to apt over the current uplink."
-    echo "(Make sure ethernet is still plugged in, or the WiFi setup will fail.)"
-  fi
-
-  phase setup-wifi-uplink
-  bash "$PAYLOAD_DIR/scripts/setup-wifi-uplink.sh"
-fi
-
 phase install-tailscale-on-host
 # Operator can immediately ssh root@<host> via Tailscale once this finishes.
 # The Tailscale hostname is the short name from PROXMOX_FQDN so MagicDNS

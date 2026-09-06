@@ -38,7 +38,7 @@ That's it. The wizard will:
 
 1. Run pre-flight checks (and tell you exactly how to install anything missing)
 2. Walk you through every prompt — range mode (`full` vs `minimal`),
-   Tailscale keys, AD passwords, optional WiFi-uplink config, etc.
+   Tailscale keys, AD passwords, target install disk, etc.
    — with descriptions, defaults, and per-field validation
 3. Write `.env` (chmod 600)
 4. Download the Proxmox VE ISO (~1.5 GB, cached at `iso/cache/`)
@@ -53,7 +53,7 @@ for the full phase-by-phase rundown.
 - A Tailscale account, a reusable auth key (`tskey-auth-…`), and an API key (`tskey-api-…`) — generate at <https://login.tailscale.com/admin/settings/keys>
 - An SSH public key at `~/.ssh/id_ed25519.pub` (or any path — wizard accepts both pasted keys and paths)
 - 4 GB+ free disk on the build laptop
-- For the target box: ≥ 16 GB RAM / 12 threads / 256 GB SSD (minimal mode) or ≥ 30 GB / 16 threads / 500 GB (full mode), and **wired ethernet for the install** (WiFi can take over after — see [`docs/unattended-iso.md`](docs/unattended-iso.md))
+- For the target box: ≥ 16 GB RAM / 12 threads / 256 GB SSD (minimal mode) or ≥ 30 GB / 16 threads / 500 GB (full mode), and a **wired ethernet connection**
 
 Other Linux distros: substitute the package manager. Fedora/RHEL:
 `dnf install gettext curl tar rsync coreutils xorriso openssl`. Arch:
