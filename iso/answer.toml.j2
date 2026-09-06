@@ -1,4 +1,4 @@
-# Proxmox VE 8.x auto-installer answer file.
+# Proxmox VE auto-installer answer file (validated on PVE 8.4 and 9.2).
 #
 # Reference: https://pve.proxmox.com/wiki/Automated_Installation
 #
@@ -7,9 +7,9 @@
 # from the network.
 
 [global]
-# kebab-case keys: required for PVE 9.x forward-compat. PVE 8.4 accepts
-# both kebab-case and snake_case; 9.x emits deprecation warnings on
-# snake_case and will hard-fail in a future release.
+# kebab-case keys throughout. PVE 8.4 accepts both styles; PVE 9.x emits
+# deprecation warnings for snake_case and will hard-fail in a future
+# release. iso/build-iso.sh treats any deprecation warning as an error.
 keyboard      = "en-us"
 country       = "us"
 fqdn          = "${PROXMOX_FQDN}"
@@ -30,13 +30,9 @@ source = "from-dhcp"
 
 [disk-setup]
 filesystem = "ext4"
-# Try common device names in priority order. The installer picks the FIRST
-# that actually exists on the target:
-#   - nvme0n1   modern laptops + most consumer SSDs in M.2 slots
-#   - sda       SATA / SCSI (older laptops, server SATA drives)
-#   - vda       VirtIO (QEMU / cloud VMs — handy for testing in nested KVM)
-# If your host has multiple internal disks and you want a specific one,
-# override DISK_DEVICE_LIST in .env (e.g. DISK_DEVICE_LIST='["nvme1n1"]').
+# THIS DISK GETS WIPED. ext4/xfs installs take exactly one disk.
+# Set DISK_DEVICE in .env to a bare device name (nvme0n1 / sda / vda);
+# iso/build-iso.sh validates it and wraps it into the TOML array below.
 disk-list = ${DISK_DEVICE_LIST}
 
 [first-boot]

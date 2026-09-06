@@ -60,7 +60,7 @@ Both modes additionally require:
 - **x86_64** CPU, PassMark score > 6,000
 - **Wired ethernet** for the ~15-minute Proxmox install phase, even if you
   plan to run on WiFi afterward (see [optional values](#optional-values) below)
-- A target disk the installer can wipe entirely — see `DISK_DEVICE_LIST`
+- A target disk the installer can wipe entirely — see `DISK_DEVICE`
   below for how to identify it
 
 Full per-VM RAM/vCPU breakdowns: [`docs/minimal-mode.md`](minimal-mode.md)
@@ -104,7 +104,7 @@ mid-run. Grouped in the same order the wizard asks for them.
 |---|---|---|
 | `LUDUS_ADMIN_PASSWORD` | ≥ 12 characters | Your choice — becomes the Proxmox `root` password on the installed system. Rotate after first boot if you like. |
 | `OPERATOR_SSH_PUBKEY` | A public key (`ssh-ed25519 AAAA...`) **or** a file path | Usually `~/.ssh/id_ed25519.pub` on your build laptop. No key yet? `ssh-keygen -t ed25519`. |
-| `DISK_DEVICE_LIST` | TOML array with **exactly one** device, e.g. `["nvme0n1"]` | Boot any Linux live USB on the **target** box and run `lsblk -d -o NAME,SIZE,MODEL,TRAN`. Common values: `nvme0n1` (modern M.2 SSDs, default), `sda` (SATA/SCSI), `vda` (VirtIO, nested KVM testing). PVE 8.4's ext4 install only accepts a single disk. |
+| `DISK_DEVICE` | Bare device name, e.g. `nvme0n1` — no brackets, no quotes | Boot any Linux live USB on the **target** box and run `lsblk -d -o NAME,SIZE,MODEL,TRAN`. Common values: `nvme0n1` (modern M.2 SSDs, default), `sda` (SATA/SCSI), `vda` (VirtIO, nested KVM testing). PVE 9's ext4 install accepts exactly one disk; `iso/build-iso.sh` wraps this name into the TOML array for you. |
 | `PROXMOX_FQDN` | FQDN, e.g. `ludus-attackrangelocal.range.local` | Your choice, or accept the default. Becomes `/etc/hostname` on Proxmox **and** the Tailscale device's short name — i.e. how you'll `ssh root@<short-name>.<tailnet>`. |
 
 ### Required — monitoring
