@@ -204,6 +204,7 @@ Cleanly deregisters Tailscale devices, then destroys the VMs in Proxmox.
 
 - [`docs/unattended-iso.md`](docs/unattended-iso.md) — how the ISO pipeline works
 - [`docs/attack-range-patches.md`](docs/attack-range-patches.md) — what we change in upstream
+- [`docs/upstream-tracking.md`](docs/upstream-tracking.md) — upstream review log: adopted vs deliberately skipped
 - [`docs/network-isolation.md`](docs/network-isolation.md) — every layer of the egress block
 - [`docs/tailscale-acls.md`](docs/tailscale-acls.md) — keep the range off other tailnet devices
 - [`docs/ad-forest.md`](docs/ad-forest.md) — forest topology, credentials, extending
