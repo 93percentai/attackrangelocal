@@ -28,7 +28,10 @@ esac
 OUT="${REPO_ROOT}/ludus/range-config.yml"
 echo "Using $RANGE_MODE-mode template: $TEMPLATE"
 
-required=(RANGE_ID TS_AUTHKEY TS_API_KEY AD_DOMAIN_FQDN AD_DOMAIN_ADMIN AD_PASSWORD TS_TAG)
+# SPLUNK_ADMIN_PASSWORD is rendered into the splunk VM's role_vars, so an
+# empty value would silently install Splunk with a blank admin password.
+required=(RANGE_ID TS_AUTHKEY TS_API_KEY AD_DOMAIN_FQDN AD_DOMAIN_ADMIN AD_PASSWORD
+          TS_TAG SPLUNK_ADMIN_PASSWORD)
 for v in "${required[@]}"; do
   if [[ -z "${!v:-}" || "${!v}" == REPLACE_ME* ]]; then
     echo "Required env var $v is unset or still a placeholder" >&2

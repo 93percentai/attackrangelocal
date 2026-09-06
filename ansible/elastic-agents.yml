@@ -25,7 +25,7 @@
   hosts: windows
   gather_facts: false
   vars:
-    elastic_version: "{{ lookup('env','ELASTIC_VERSION') | default('8.15.0', true) }}"
+    elastic_version: "{{ lookup('env','ELASTIC_VERSION') | default('8.19.5', true) }}"
     fleet_host: "http://{{ range_id | default(lookup('env','RANGE_ID')) }}-elastic:8220"
     install_dir: 'C:\Program Files\Elastic\Agent'
 
@@ -63,7 +63,7 @@
   become: true
   gather_facts: true
   vars:
-    elastic_version: "{{ lookup('env','ELASTIC_VERSION') | default('8.15.0', true) }}"
+    elastic_version: "{{ lookup('env','ELASTIC_VERSION') | default('8.19.5', true) }}"
     fleet_host: "http://{{ range_id | default(lookup('env','RANGE_ID')) }}-elastic:8220"
 
   tasks:
