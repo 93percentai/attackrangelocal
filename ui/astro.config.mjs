@@ -1,18 +1,13 @@
 import { defineConfig } from "astro/config";
-import tailwind from "@astrojs/tailwind";
 import node from "@astrojs/node";
+import tailwindcss from "@tailwindcss/vite";
 
-// Server-rendered (we need API routes that shell out to ludus/tailscale).
+// Server-rendered: the /api routes shell out to ludus/tailscale on the host.
 export default defineConfig({
   output: "server",
   adapter: node({ mode: "standalone" }),
-  integrations: [tailwind({ applyBaseStyles: false })],
   server: { host: "0.0.0.0", port: 4321 },
   vite: {
-    server: {
-      // Allow the UI to talk to the patched Attack Range REST API at :4000
-      // when we run them together via docker compose.
-      proxy: {},
-    },
+    plugins: [tailwindcss()],
   },
 });

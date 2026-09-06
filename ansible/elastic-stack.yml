@@ -4,8 +4,13 @@
 #   - Kibana         (port 5601)  - web UI + Fleet UI
 #   - Fleet Server   (port 8220)  - enrollment endpoint for Elastic Agents
 #
-# Resource-constrained: ES heap pinned at 1 GB, Kibana 512 MB. Fits the
-# 4 GB / 2 vCPU VM with ~500 MB headroom for the OS.
+# Resource-constrained: ES heap pinned at 1 GB, Kibana 512 MB. Measured on
+# a live 8.19.5 stack: ES ~1.57 GB RSS + Kibana ~544 MB = ~2.1 GB, which
+# fits the 4 GB / 2 vCPU VM with room for Fleet Server and the OS.
+#
+# Do NOT bump to Elastic 9.x without also growing this VM: Kibana 9.5.1
+# OOM-kills at --max-old-space-size=512 (dies ~487 MB) and needs >=1 GB
+# heap, taking the stack past ~2.4 GB.
 #
 # Security is ENABLED (xpack.security) with the default `elastic` user;
 # Fleet enrolment tokens are generated post-boot and dropped into a
@@ -20,7 +25,7 @@
   gather_facts: true
 
   vars:
-    elastic_version: "{{ lookup('env','ELASTIC_VERSION') | default('8.15.0', true) }}"
+    elastic_version: "{{ lookup('env','ELASTIC_VERSION') | default('8.19.5', true) }}"
     elastic_password: "{{ lookup('env','ELASTIC_PASSWORD') }}"
     kibana_enc_key:   "{{ lookup('env','KIBANA_ENCRYPTION_KEY') }}"
     fleet_server_host: "{{ ansible_default_ipv4.address }}"
@@ -72,6 +77,12 @@
                 - xpack.security.transport.ssl.enabled=false
                 - ELASTIC_PASSWORD={{ elastic_password }}
                 - ES_JAVA_OPTS=-Xms1g -Xmx1g
+                # Set at STARTUP, not via a later API call. On a small disk
+                # the 85/90/95% watermarks block .security-7 from ever being
+                # allocated; without .security-7 the reserved realm can't
+                # authenticate; without auth you can't PUT the setting to
+                # unblock it. Startup env breaks that deadlock.
+                - cluster.routing.allocation.disk.threshold_enabled=false
               ulimits:
                 memlock: { soft: -1, hard: -1 }
               ports: ["9200:9200"]
@@ -141,11 +152,12 @@
       delay: 10
       until: es_up.status == 200
 
-    - name: Relax disk allocation watermark for small lab disks
-      # The 4 GB elastic VM has limited disk; ES's 85/90/95% watermarks
-      # otherwise block .security-7 from being allocated on first boot,
-      # which then prevents the kibana_system password reset below.
-      # Verified against a live single-node ES 8.15 deployment.
+    - name: Relax disk allocation watermark (belt-and-braces)
+      # The compose file already sets this at container startup, which is
+      # what actually breaks the auth/allocation deadlock on a fresh node.
+      # This PUT additionally covers a cluster that was created BEFORE the
+      # startup setting existed (upgrade-in-place), where the setting would
+      # otherwise never take effect. Non-fatal: a fresh node is already fine.
       ansible.builtin.uri:
         url: "http://127.0.0.1:9200/_cluster/settings"
         method: PUT
@@ -157,6 +169,7 @@
           persistent:
             cluster.routing.allocation.disk.threshold_enabled: false
         status_code: 200
+      failed_when: false
 
     - name: Wait for Elasticsearch cluster to be GREEN
       # Required before resetting kibana_system — the password reset writes

@@ -126,6 +126,12 @@ ludus:
       - NocteDefensor.ludus_tailscale
     role_vars:
       <<: *ts
+      # Pin Splunk explicitly. P4T12ICK.ludus_ar_splunk defaults to 9.3.0;
+      # upstream splunk/attack_range moved to 10.2.2, and pinning here means
+      # a role-default change can't silently move our Splunk version (or
+      # break the build when an old download URL is retired).
+      ludus_ar_splunk_url: "https://download.splunk.com/products/splunk/releases/10.2.2/linux/splunk-10.2.2-80b90d638de6-linux-amd64.tgz"
+      ludus_ar_splunk_password: "${SPLUNK_ADMIN_PASSWORD}"
 
   # -------------------------------------------------------------------------
   # Linux victim
