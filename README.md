@@ -27,7 +27,7 @@ cd attackrangelocal
 sudo apt update && sudo apt install -y \
     gettext-base curl tar rsync coreutils xorriso openssl
 curl -fsSLo /tmp/paia.deb \
-  http://download.proxmox.com/debian/pve/dists/bookworm/pve-no-subscription/binary-amd64/proxmox-auto-install-assistant_8.4.6_amd64.deb
+  http://download.proxmox.com/debian/pve/dists/trixie/pve-no-subscription/binary-amd64/proxmox-auto-install-assistant_9.2.8_amd64.deb
 sudo apt install -y /tmp/paia.deb && rm /tmp/paia.deb
 
 # 3. Run the wizard
@@ -41,7 +41,7 @@ That's it. The wizard will:
    Tailscale keys, AD passwords, target install disk, etc.
    — with descriptions, defaults, and per-field validation
 3. Write `.env` (chmod 600)
-4. Download the Proxmox VE ISO (~1.5 GB, cached at `iso/cache/`)
+4. Download the Proxmox VE 9.2 ISO (~1.6 GB, cached at `iso/cache/`)
 5. Bake `attackrangelocal-<RANGE_ID>-<DATE>.iso` at `iso/build/`
 6. Print the `dd` command to flash to a USB stick
 

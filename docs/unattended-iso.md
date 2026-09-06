@@ -10,7 +10,8 @@ Three stages baked into one ISO:
 
 ### Stage A — Proxmox auto-install
 
-Proxmox VE 8.2+ ships an [auto-installer](https://pve.proxmox.com/wiki/Automated_Installation)
+Proxmox VE ships an [auto-installer](https://pve.proxmox.com/wiki/Automated_Installation)
+(we pin **PVE 9.2-1**; the pipeline is validated on 8.4 and 9.2)
 that consumes a TOML answer file (`iso/answer.toml.j2`, rendered from your
 `.env` at build time) and a custom first-boot script. `iso/build-iso.sh`
 wraps the official `proxmox-auto-install-assistant` tool to bake both into
@@ -18,30 +19,39 @@ the official Proxmox ISO.
 
 ### Stage B — First-boot bootstrap
 
-`iso/first-boot.sh` is copied onto the installed system and run **once** by
-a systemd oneshot unit Proxmox's installer registers. It:
+`iso/build-iso.sh` generates a wrapper around `iso/first-boot.sh` that
+embeds your `secrets.env` (~1 KB, base64) plus a `REPO_URL`/`REPO_REF` pin,
+and PAI bakes that wrapper onto the ISO. A systemd oneshot unit runs it
+**once** after install. Phases, in order:
 
-1. Waits for the network
-2. Extracts the payload tarball (this whole repo + your secrets.env)
-3. Installs Tailscale on the Proxmox host itself and joins your tailnet
-   → you can `ssh root@ludus-host.<tailnet>` from minute ~3 to watch
-4. Runs `scripts/bootstrap-ludus.sh` (Ludus install)
-5. Runs `scripts/install-roles.sh` (Galaxy roles + Ludus template build,
-   ~60–90 min — the long pole)
-6. Runs `scripts/deploy-range.sh` (Ludus deploys all 6 VMs, ~45 min)
-7. Runs `scripts/lock-down.sh` (strips bootstrap egress rules — no more
-   internet from lab VMs)
-8. Runs `scripts/start-continuous-sim.sh --windows` (Atomic Runner service
-   on win-client1)
-9. Disables itself so it never re-runs
+| # | Phase | What |
+|---|---|---|
+| 1 | `wait-for-network` | ping until the uplink is live |
+| 2 | `install-git` | `apt-get install git` (not in the PVE base image) |
+| 3 | `clone-repo` | `git clone` this repo at the pinned `REPO_REF`, drop in `.env` |
+| 4 | `install-tailscale-on-host` | join the tailnet → you can SSH in from ~minute 3 |
+| 5 | `install-ludus` | `scripts/bootstrap-ludus.sh` |
+| 6 | `install-roles-and-templates` | Galaxy roles + Ludus template build (~60–90 min, the long pole) |
+| 7 | `deploy-range` | `scripts/deploy-range.sh` — 5 or 7 VMs depending on `RANGE_MODE` (~45 min) |
+| 8 | `install-monitoring` | Splunk users, plus Elastic stack + agents when `RANGE_MODE=full` |
+| 9 | `install-extended-attacks` | APT Simulator, PurpleSharp, CALDERA, EICAR, optional defused samples |
+| 10 | `lock-down-egress` | strip every `bootstrap-*` rule — only Tailscale ports survive |
+| 11 | `start-continuous-simulation` | Atomic Runner service on win-client1 |
+| 12 | `range-up-continuous-sim-running` | done; unit disables itself |
+
+The repo is **git-cloned at first boot**, not shipped in the ISO: PAI caps
+the first-boot executable at 1 MiB, which the repo far exceeds. Pinning
+`REPO_REF` to the build-time commit keeps deploys reproducible.
+
+If phase 8 or 9 fails, first-boot **halts before lockdown** (phase
+`abort-before-lockdown`) rather than cutting egress on a half-built lab —
+it prints the exact commands to finish by hand over SSH.
 
 ### Stage C — Operator visibility
 
-- **Tailscale on host**: `ssh root@ludus-host.<tailnet>` from minute ~3
+- **Tailscale on host**: `ssh root@ludus-attackrangelocal.<tailnet>` from minute ~3
 - **Status file**: `cat /var/lib/ludus-bootstrap/status` shows the current
-  phase: `wait-for-network`, `install-tailscale-on-host`, `install-ludus`,
-  `install-roles-and-templates`, `deploy-range`, `lock-down-egress`,
-  `start-continuous-simulation`, `range-up-continuous-sim-running`
+  phase (see the table above for the full sequence)
 - **Logs**: `journalctl -u proxmox-firstboot -f` or
   `tail -f /var/log/attackrangelocal-firstboot.log`
 - **Optional webhook**: set `NOTIFY_WEBHOOK=...` in `.env` to get a Slack
@@ -53,11 +63,19 @@ attacks firing": **~3 hours** on a 32 GB host.
 ## Build the ISO
 
 ```bash
-# On your laptop (Debian/Ubuntu recommended)
-sudo apt install proxmox-auto-install-assistant gettext-base
+# On your laptop (Debian/Ubuntu recommended).
+# PAI must match the Proxmox major version you build:
+#   PVE 9.x -> trixie repo     PVE 8.x -> bookworm repo
+curl -fsSLo /tmp/paia.deb \
+  http://download.proxmox.com/debian/pve/dists/trixie/pve-no-subscription/binary-amd64/proxmox-auto-install-assistant_9.2.8_amd64.deb
+sudo apt install -y /tmp/paia.deb gettext-base
+
 cp ludus/.env.example .env
 $EDITOR .env                # fill in every REPLACE_ME
 ./iso/build-iso.sh
+
+# Or just run the wizard, which does all of the above interactively:
+./scripts/build-iso-wizard.sh
 # -> iso/build/attackrangelocal-<RANGE_ID>-<DATE>.iso
 ```
 
@@ -75,7 +93,7 @@ Replace `/dev/sdX` with your USB stick's actual device. Triple-check with
 
 1. Insert USB, boot
 2. ~15 min: Proxmox is installed, machine reboots automatically
-3. ~3 min after reboot: Proxmox host joins Tailscale → `ssh root@ludus-host.<tailnet>` works
+3. ~3 min after reboot: Proxmox host joins Tailscale → `ssh root@ludus-attackrangelocal.<tailnet>` works
 4. ~90 min later: templates built
 5. ~45 min later: range up, lab VMs reachable via Tailscale
 6. Immediately after: `lock-down.sh` runs → no more egress
@@ -95,7 +113,7 @@ systemctl start  proxmox-firstboot.service
 To do *just* a range redeploy (skipping Proxmox/Ludus install):
 
 ```bash
-ssh root@ludus-host.<tailnet>
+ssh root@ludus-attackrangelocal.<tailnet>
 cd /opt/attackrangelocal
 scripts/deploy-range.sh
 ```

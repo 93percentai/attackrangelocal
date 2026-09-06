@@ -3,7 +3,7 @@
 #
 # Inputs:
 #   - .env at the repo root, fully populated (no REPLACE_ME values)
-#   - The official Proxmox VE 8.2+ ISO (auto-downloaded if missing)
+#   - The official Proxmox VE ISO (auto-downloaded if missing; 9.2 by default)
 #   - `proxmox-auto-install-assistant` installed on this host
 #       Debian/Ubuntu: apt install proxmox-auto-install-assistant
 #       (Or build from source: github.com/proxmox/pve-installer)
@@ -32,14 +32,24 @@ if [[ ! -f "$ENV_FILE" ]]; then
 fi
 set -a; source "$ENV_FILE"; set +a
 
-# Single target disk for the Proxmox install. PVE 8.4 only allows ONE disk
-# in disk-list for ext4. Default = nvme0n1 (most modern laptops & 2020+ SSDs).
-# Common overrides:
-#   sda        SATA / SCSI drives (older laptops, server SATA)
-#   nvme0n1    NVMe (modern laptops, M.2 SSDs) -- DEFAULT
-#   vda        VirtIO (nested QEMU/KVM testing)
-: "${DISK_DEVICE_LIST:='["nvme0n1"]'}"
-export DISK_DEVICE_LIST
+# Target disk for the Proxmox install, as a PLAIN device name (no
+# brackets, no quotes) e.g. nvme0n1 / sda / vda. We build the TOML array
+# ourselves below -- asking users to embed `["nvme0n1"]` in .env is a
+# quoting trap: `set -a; source .env` strips the inner double quotes and
+# renders invalid TOML.
+#   nvme0n1   NVMe: modern laptops, M.2 SSDs -- DEFAULT
+#   sda       SATA / SCSI: older laptops, server SATA
+#   vda       VirtIO: nested QEMU/KVM testing
+# ext4/xfs installs accept exactly ONE disk.
+: "${DISK_DEVICE:=nvme0n1}"
+if [[ ! "$DISK_DEVICE" =~ ^[a-z0-9]+$ ]]; then
+  echo "DISK_DEVICE must be a bare device name like nvme0n1 or sda" >&2
+  echo "  (got: '$DISK_DEVICE')" >&2
+  exit 1
+fi
+# Rendered into iso/answer.toml.j2 as: disk-list = ["nvme0n1"]
+DISK_DEVICE_LIST="[\"${DISK_DEVICE}\"]"
+export DISK_DEVICE DISK_DEVICE_LIST
 
 required=(RANGE_ID TS_AUTHKEY TS_API_KEY AD_DOMAIN_FQDN AD_DOMAIN_ADMIN
           AD_PASSWORD LUDUS_ADMIN_PASSWORD OPERATOR_SSH_PUBKEY TS_TAG
@@ -90,10 +100,13 @@ echo "    repo: $REPO_URL"
 echo "    ref:  $REPO_REF"
 
 # ---------- 4. Download Proxmox ISO (cached) ----------
-# Pin to a Proxmox VE 8.x release. The auto-installer answer.toml format is
-# stable across 8.2–8.4; PVE 9.x reorganised the installer and we haven't
-# validated against it yet.
-: "${PROXMOX_ISO_URL:=https://enterprise.proxmox.com/iso/proxmox-ve_8.4-1.iso}"
+# Pinned to a specific Proxmox VE release for reproducible builds.
+# PVE 9.x is Debian 13 (Trixie) based. Ludus supports Proxmox 8 and 9.
+# The answer.toml in iso/answer.toml.j2 validates unchanged on both
+# 8.4 and 9.2 (all keys already kebab-case).
+# To build against a different release, set PROXMOX_ISO_URL and use a
+# matching proxmox-auto-install-assistant (8.x <-> bookworm, 9.x <-> trixie).
+: "${PROXMOX_ISO_URL:=https://enterprise.proxmox.com/iso/proxmox-ve_9.2-1.iso}"
 PROXMOX_ISO_NAME="$(basename "$PROXMOX_ISO_URL")"
 PROXMOX_ISO="${CACHE_DIR}/${PROXMOX_ISO_NAME}"
 if [[ ! -f "$PROXMOX_ISO" ]]; then
@@ -103,8 +116,32 @@ fi
 
 
 # ---------- 5. Validate the answer file ----------
+# NOTE: `validate-answer` in every PVE 9 PAI (verified on 9.0.9 - 9.2.8)
+# exits 0 even for malformed TOML and for deprecated keys. PAI 8.x exited
+# non-zero correctly. So we must NOT trust $? here -- inspect the output.
 echo "==> Validating answer.toml..."
-proxmox-auto-install-assistant validate-answer "${BUILD_DIR}/answer.toml"
+VALIDATE_OUT="$(proxmox-auto-install-assistant validate-answer \
+                  "${BUILD_DIR}/answer.toml" 2>&1 || true)"
+printf '%s\n' "$VALIDATE_OUT" | sed 's/^/    /'
+
+# PAI emits errors as lines beginning "Error" (e.g. "Error parsing answer
+# file: ..." / "Error: Found issues in the answer file."). Anchor to line
+# start so the success text "no errors found!" doesn't false-positive.
+if printf '%s\n' "$VALIDATE_OUT" | grep -qE '^Error'; then
+  echo "ERROR: answer.toml failed validation (see above)." >&2
+  echo "       File: ${BUILD_DIR}/answer.toml" >&2
+  exit 1
+fi
+if printf '%s' "$VALIDATE_OUT" | grep -qi 'deprecated'; then
+  echo "ERROR: answer.toml uses deprecated keys. PVE 9 warns today and will" >&2
+  echo "       hard-fail in a future release. Fix iso/answer.toml.j2 to use" >&2
+  echo "       kebab-case keys (root-password, root-ssh-keys, disk-list)." >&2
+  exit 1
+fi
+if ! printf '%s' "$VALIDATE_OUT" | grep -q 'parsed successfully'; then
+  echo "ERROR: validate-answer did not report success. Output above." >&2
+  exit 1
+fi
 
 # ---------- 6. Build the first-boot wrapper ----------
 # PAI's prepare-iso accepts ONE first-boot executable, max 1 MiB. We can't
