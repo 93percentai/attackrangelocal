@@ -1,62 +1,87 @@
 """
-local_ludus provider — placeholder substrate for Splunk Attack Range v5.
+local_ludus provider — no-cloud substrate for Splunk Attack Range v5.
 
-The VMs already exist (deployed by Ludus on Proxmox) and are reachable by
-Tailscale MagicDNS. There is no infrastructure for Attack Range to "build"
-or "destroy". All the heavy lifting that the AWS/Azure/GCP providers do via
-Terraform is a no-op here.
+The VMs already exist: Ludus created them on Proxmox and they are reachable
+over Tailscale MagicDNS. There is no cloud API to call, no Terraform state
+to keep, no object-storage backend to provision, and no SSH keypair to
+import into a cloud account.
 
-Attack Range still drives:
-  - Ansible-based VM configuration (when provider != local_ludus, this is
-    skipped because Ludus already ran the P4T12ICK.ludus_ar_* roles)
-  - The simulate engine (Invoke-AtomicTest via WinRM over Tailscale)
-  - The web UI / REST API
+This class satisfies the `BaseCloudProvider` ABC so `AttackRangeController`
+can instantiate it, and makes every cloud operation an explicit no-op that
+logs what it skipped. Anything that MUST return a value returns something
+harmless and deterministic.
 
-Companion file copied in by attack_range_fork/bootstrap.sh.
+IMPORTANT — keep in sync with attack_range/cloud_providers/base_provider.py.
+If upstream adds an @abstractmethod, this class must implement it or the
+controller will raise TypeError at construction. attack_range_fork/
+apply-patches.py verifies this on every run.
 """
 
 from __future__ import annotations
+
 import logging
+import re
+from typing import Optional
+
+from .base_provider import BaseCloudProvider
 
 
-class LocalLudusProvider:
-    """No-op provider that satisfies the BaseProvider interface enough for
-    Attack Range's lifecycle methods to short-circuit cleanly."""
+class LocalLudusProvider(BaseCloudProvider):
+    """No-op provider for ranges whose infrastructure Ludus already built."""
 
-    name = "local_ludus"
-
-    def __init__(self, config: dict, log: logging.Logger | None = None):
-        self.config = config
-        self.log = log or logging.getLogger("attack_range.local_ludus")
-        self.log.info("local_ludus provider initialised — VMs are managed by Ludus")
-
-    # ------------------------------------------------------------------
-    # Lifecycle methods called by AttackRangeController. All no-ops.
-    # ------------------------------------------------------------------
-
-    def build_infrastructure(self, *_args, **_kwargs) -> None:
-        self.log.info("local_ludus: build_infrastructure skipped (Ludus owns VMs)")
-
-    def destroy_infrastructure(self, *_args, **_kwargs) -> None:
-        self.log.info("local_ludus: destroy_infrastructure skipped (use scripts/teardown.sh)")
-
-    def build_vpn_phase(self, *_args, **_kwargs) -> None:
-        self.log.info("local_ludus: build_vpn_phase skipped (Tailscale handles VPN)")
-
-    def prompt_vpn_connection(self, *_args, **_kwargs) -> None:
-        return  # operator is already on the tailnet
-
-    def stop(self, *_args, **_kwargs) -> None:
-        self.log.info("local_ludus: stop skipped — use 'ludus range stop' on the Ludus host")
-
-    def resume(self, *_args, **_kwargs) -> None:
-        self.log.info("local_ludus: resume skipped — use 'ludus range start' on the Ludus host")
+    def __init__(self, config: dict, logger: logging.Logger):
+        super().__init__(config, logger)
+        self.logger.info(
+            "local_ludus provider active — VMs are managed by Ludus/Proxmox, "
+            "no cloud API calls will be made"
+        )
 
     # ------------------------------------------------------------------
-    # Inventory hook — used by the patched ansible_manager.
+    # BaseCloudProvider ABC
+    # ------------------------------------------------------------------
+
+    def get_region(self, required: bool = True) -> Optional[str]:
+        """No cloud regions on bare metal. A stable string keeps any
+        downstream f-string/path join from producing 'None'."""
+        return "local"
+
+    def sanitize_name(self, name: str) -> str:
+        """Ludus VM names allow [A-Za-z0-9-]; mirror the cloud providers'
+        contract of returning a safe, lowercase, deterministic name."""
+        return re.sub(r"[^a-zA-Z0-9-]", "-", name).strip("-").lower()
+
+    def check_backend_exists(self, backend_name: str) -> bool:
+        """No Terraform remote backend — report 'exists' so callers skip
+        creation instead of trying (and failing) to make one."""
+        self.logger.debug("local_ludus: check_backend_exists -> True (no-op)")
+        return True
+
+    def create_backend(self, backend_name: str, region: str) -> None:
+        self.logger.debug("local_ludus: create_backend skipped (no-op)")
+
+    def delete_backend(self, backend_name: str, region: str) -> None:
+        self.logger.debug("local_ludus: delete_backend skipped (no-op)")
+
+    def import_ssh_key(
+        self, key_name: str, public_key_content: str, region: str
+    ) -> None:
+        """Ludus installs the operator key at VM-provision time; there is
+        no cloud keypair registry to import into."""
+        self.logger.debug("local_ludus: import_ssh_key skipped (Ludus owns keys)")
+
+    def delete_ssh_key(self, key_name: str, region: str) -> None:
+        self.logger.debug("local_ludus: delete_ssh_key skipped (Ludus owns keys)")
+
+    def update_backend_config(
+        self, backend_params: dict, backend_file_path: str
+    ) -> None:
+        """No Terraform, so no backend.tf to write."""
+        self.logger.debug("local_ludus: update_backend_config skipped (no Terraform)")
+
+    # ------------------------------------------------------------------
+    # Convenience hooks used by the patched controller
     # ------------------------------------------------------------------
 
     def get_inventory_path(self) -> str:
-        """The patched ansible_manager prefers /inventory.yml directly; this
-        is here for completeness and for any code that asks the provider."""
+        """Where the patched ansible_manager reads the static inventory."""
         return "/inventory.yml"

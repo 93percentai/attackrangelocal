@@ -1,172 +1,152 @@
 # Attack Range v5 patches
 
-We do not maintain a hard fork of `splunk/attack_range`. Instead,
-`attack_range_fork/bootstrap.sh` clones the upstream repo at a pinned tag
-(default `v5.0.0`) into `attack_range_fork/upstream/` and applies our
-patches programmatically via `attack_range_fork/apply-patches.py`.
+We don't maintain a hard fork of `splunk/attack_range`. Instead
+`attack_range_fork/bootstrap.sh` clones upstream at a pinned tag
+(`ATTACK_RANGE_REF`, default `v5.0.0`) into `attack_range_fork/upstream/`,
+copies in the files under `new-files/`, then applies source edits with
+`attack_range_fork/apply-patches.py`.
 
-This keeps us close to upstream — to follow a new Attack Range release,
-bump `ATTACK_RANGE_REF` in `bootstrap.sh` and re-run it.
+## The verification gate (read this first)
 
-The patcher uses exact literal-string anchors (not line numbers, not loose
-regexes) taken directly from the pinned tag's source, so a
-`WARN: literal text not found` means upstream drifted and the anchor in
-`apply-patches.py` needs updating — see "Re-applying patches" below. Run
-`attack_range_fork/bootstrap.sh` after any change and confirm every patch
-reports `OK` (not `WARN`) before trusting the result.
+`apply-patches.py` **exits non-zero** unless, after patching:
 
-## Why `local_ludus` needs patches at all
+1. every patch's marker string is present on disk, AND
+2. every file it touched still parses as valid Python.
 
-Upstream Attack Range v5 assumes it owns the whole VM lifecycle: it reads a
-`general.cloud_provider` (`aws | azure | gcp`) from the config YAML,
-provisions infrastructure with Terraform, stands up a WireGuard VPN router,
-and only then configures the lab with Ansible. In this repo, **Ludus has
-already created and configured every VM** (`scripts/deploy-range.sh`) and
-**Tailscale already provides remote access** — there's no Terraform state
-and no WireGuard router to build. The patches teach Attack Range's
-controller about a `local_ludus` provider that skips all of that and treats
-the range as already running.
+`bootstrap.sh` aborts on that non-zero exit. This is deliberate and it is
+the most important property of the script.
 
-## The patches
+**Why:** an earlier version of the patcher matched on regexes that had
+drifted out of sync with upstream. It degraded to a near-total no-op —
+**11 of 12 patches silently failed** — while still printing `Done.` and
+exiting 0. The fork looked fine and was not. A patch failure must never
+again be a warning you can scroll past.
 
-### Patch 1 — register `local_ludus` as a valid provider
+If you see `PATCHING FAILED`, upstream changed shape. Open the file and
+pattern it names, find the equivalent code, update the `Patch(...)` entry.
+Do not work around it by skipping the patch: without them `local_ludus`
+isn't a registered provider and Attack Range will try to reach a cloud API
+that doesn't exist.
 
-**Where**: `attack_range/attack_range_controller.py`
+## Ground truth this targets
 
-- `AttackRangeController.__init__` validates `self.cloud_provider_name`
-  against an allow-list (`["aws", "azure", "gcp"]`) and calls `sys.exit(1)`
-  otherwise — `local_ludus` is added to that list.
-- `_init_cloud_provider()` gets a `local_ludus` branch that instantiates
-  `LocalLudusProvider` (companion file, copied in — not patched).
-- `_setup_directories()` gets a `local_ludus` branch for `self.terraform_dir`
-  (unused in practice, since local_ludus never calls `terraform_manager`,
-  but every other branch sets it so we keep the invariant).
+Verified against `splunk/attack_range@v5.0.0` (commit `5f63cd7`):
 
-**Companion file** (copied in by `bootstrap.sh`, not patched):
-`attack_range/cloud_providers/local_ludus_provider.py` — implements the
-`BaseCloudProvider`-shaped no-op methods; none of them are actually called
-in the local_ludus code path (see Patch 2), so it exists mostly so
-`_init_cloud_provider()` has something concrete to instantiate.
+| Assumption | Reality |
+|---|---|
+| Config key | `general.cloud_provider` — **not** `general.provider` |
+| Controller dispatch var | `self.cloud_provider_name` |
+| AnsibleManager's copy | `self.cloud_provider` (a plain string) |
+| Method signatures | all carry return annotations (`-> None:`, `-> tuple:`, `-> dict:`) |
+| CLI provider validation | list-membership check in the controller `__init__`; there is **no** `choices=` in `attack_range.py` |
+| CLI simulate dispatch | `controller.simulate(args.target, techniques)` — `techniques` is a **local** var parsed from `args.techniques` |
+| `prompt_vpn_connection` | lives on `AnsibleManager`, not the controller |
 
-### Patch 2 — short-circuit `build()` and `destroy()`
+## The 18 patches
 
-**Why**: upstream's `build()` runs `build_vpn_phase()` (Terraform apply +
-WireGuard playbooks) then `build_lab_phase()` (regenerates `lab.yaml` from
-the `attack_range:` config and runs it) — both entirely Terraform/VPN
-lifecycle, not just "the WireGuard part". There's no narrower seam to patch
-around; for `local_ludus` the whole thing is skipped.
+### 1. Register `local_ludus` as a provider (3 patches)
 
-**Where**:
-- `AttackRangeController.build()` — for `local_ludus`, instead of calling
-  `terraform_manager`/`ansible_manager` VPN+lab machinery, it saves the
-  config, copies the static inventory (Patch 3), and marks
-  `general.status = "running"` directly, then returns. This is what makes
-  `/attack-range/simulate` (which requires `status in ["running", "completed"]`)
-  usable at all for `local_ludus` — nothing else in this codebase ever calls
-  `build()`'s upstream Terraform path.
-- `AttackRangeController.destroy()` — for `local_ludus`, just removes the
-  config file; use `scripts/teardown.sh` to actually remove the Ludus range.
+| Patch | File | What |
+|---|---|---|
+| `provider-allowlist` | `attack_range_controller.py` | adds `"local_ludus"` to the accepted-provider list so `__init__` doesn't `sys.exit(1)` |
+| `provider-import` | `attack_range_controller.py` | imports `LocalLudusProvider` next to the three cloud providers |
+| `provider-dispatch` | `attack_range_controller.py` | adds the `elif` branch in `_init_cloud_provider` |
 
-**Operational implication**: `scripts/start-attack-range.sh` runs
-`attack_range.py build --template local_ludus/default.yml` once (via the
-`attack_range` CLI container) after `docker compose up -d`, purely to
-create `config/local-ludus-range.yml` with `status: running`. Re-running it
-is idempotent (Patch 5 keeps the same `attack_range_id` every time).
+The provider itself is **copied in**, not patched:
+`new-files/attack_range/cloud_providers/local_ludus_provider.py`.
 
-### Patch 3 — static inventory injection
+It subclasses `BaseCloudProvider` and implements all **8** abstract methods
+(`get_region`, `sanitize_name`, `check_backend_exists`, `create_backend`,
+`delete_backend`, `import_ssh_key`, `delete_ssh_key`,
+`update_backend_config`). Each is a logged no-op — Ludus already built the
+VMs, there's no Terraform backend, no cloud keypair registry, no regions.
 
-**Why**: Upstream rebuilds Ansible inventory from `attack_range:` config
-entries every time it needs to talk to a VM (`update_inventory_attack_range_servers`),
-assuming AWS-shaped `10.0.2.<ip_last_octet>` private IPs and a shared SSH
-private key file. We have neither — real connectivity info lives in
-`ansible/inventory.yml.j2` (Tailscale MagicDNS hostnames, per-OS
-WinRM/SSH auth).
+> If upstream adds an `@abstractmethod`, this class must implement it or
+> the controller raises `TypeError` at construction.
 
-**Where**: `attack_range/managers/ansible_manager.py::update_inventory_attack_range_servers`
-gets a short-circuit at the top:
+### 2. Never reach Terraform (3 patches)
 
-```python
-if self.cloud_provider == "local_ludus":
-    if os.path.exists("/inventory.yml"):
-        shutil.copy("/inventory.yml", self.inventory_path)
-        return
-```
+Ludus already owns the VM lifecycle, so every Terraform code path in the
+controller is wrong for us — not just the VPN sub-step.
 
-`docker/attack-range.compose.yml` mounts `ansible/inventory.yml` at
-`/inventory.yml` in **both** the `attack_range` (CLI) and `api` services —
-the `api` service is the one that's actually always running and serves
-`/attack-range/simulate`, so it needs the mount too.
+| Patch | File | What |
+|---|---|---|
+| `terraform-dir` | `attack_range_controller.py` | gives `_setup_directories()` an explicit `local_ludus` arm. Never used, but without it we silently land in the `else:  # aws` fall-through, which reads like intent |
+| `build-shortcircuit` | `attack_range_controller.py` | returns from `build()` before `terraform_manager.update_variables()`. Saves the config, pulls in the static inventory, sets `status = "running"` so `simulate()` and the REST API work immediately |
+| `destroy-shortcircuit` | `attack_range_controller.py` | returns from `destroy()` before `setup_remote_backend()`. There's no Terraform state and no cloud SSH key to clean up; `scripts/teardown.sh` removes the Ludus range itself |
 
-**Inventory shape matters**: `ansible/inventory.yml.j2` declares groups
-FLAT at the top level (not nested under `all: children:`), because
-`AttackRangeController.simulate()` does its own raw `yaml.safe_load()` of
-this file and looks up `inventory[target]['hosts']` as a **top-level key**
-— it does not walk `all.children`. Per-host singleton groups (`dc01`,
-`winclient1`, `winsrv1`) exist purely so `simulate --target winclient1`
-resolves to exactly one host even though `winclient1` also belongs to the
-3-host `windows` group (for WinRM connection vars, which Ansible merges
-from every group a host belongs to).
+`build()` runs Terraform for the **whole** build, not just a VPN phase —
+there is no narrower seam to gate, which is why these short-circuits exist
+alongside the `wg-gate-*` patches below rather than instead of them.
 
-### Patch 4 — `simulate --loop / --random / --interval / --exclude`
+### 3. Bypass WireGuard — we use Tailscale (6 patches)
 
-**Why**: Upstream `simulate` only accepts a comma-separated technique list
-and runs once, and neither the CLI dispatcher nor `AttackRangeController.simulate()`
-forward any extra state. We want a fire-and-forget loop that picks random
-techniques from the Atomics index, skipping destructive ones.
+`wg-gate-*` early-return when the provider is `local_ludus`:
 
-**Where**:
-- `attack_range.py` — add four flags to `simulate_parser` (`--techniques` /
-  `-te` stays **required** by argparse even when `--random` is set — its
-  value is simply ignored in that case).
-- `attack_range.py::simulate_action` — forward the parsed flags into
-  `controller.simulate(...)` (upstream calls
-  `controller.simulate(args.target, techniques)` with the *local* `techniques`
-  variable, not `args.techniques` — don't anchor a patch on `args.techniques`).
-- `attack_range/attack_range_controller.py::simulate` — the original method
-  (which validates the target, refreshes inventory, and calls
-  `run_ansible_playbook_safe("simulate_atomic_red_team.yml", ...)`) is
-  renamed to `_simulate_inner` verbatim. A new `simulate()` wrapper with the
-  extra kwargs is added in front of it: single-shot when `loop=False`,
-  otherwise loops forever picking `_pick_random_technique()` (or the fixed
-  list) every `interval_minutes`, tolerating per-iteration failures.
+- `AnsibleManager.update_vpn_playbook`
+- `AnsibleManager.update_vpn_config_playbook`
+- `AnsibleManager._patch_wireguard_allowed_ips`
+- `AnsibleManager._patch_wireguard_server_config`
+- `AnsibleManager.prompt_vpn_connection`
+- `AttackRangeController.build_vpn_phase` → returns `(None, None)`
 
-**Random selection** pulls from `redcanaryco/atomic-red-team`'s shipped
-Indexes CSVs under `atomics/Indexes/Indexes-CSV/*.csv` (mounted into the
-`attack_range` container from the `atomic-red-team` volume). The exclude
-list filters destructive techniques (default in `.env`:
-`T1485,T1486,T1490,T1491,T1561,T1565,T1529`).
+### 4. Static inventory injection (1 patch)
 
-**Not exposed over the API**: `--loop`/`--random`/`--interval`/`--exclude`
-only exist on the CLI (`attack_range.py simulate`). The Flask API's
-`POST /attack-range/simulate` (`api/app.py`) takes a plain
-`{attack_range_id, target, techniques[]}` body and always calls
-`controller.simulate(target, techniques)` once — that's intentional
-(`docs/continuous-simulation.md`'s "Path B" runs the CLI directly via
-`docker compose exec`, not through the API).
+`static-inventory` short-circuits
+`AnsibleManager.update_inventory_attack_range_servers` to copy an
+operator-supplied inventory instead of deriving one from Terraform outputs.
 
-### Patch 5 — fixed `attack_range_id`
+Path comes from `$LOCAL_LUDUS_INVENTORY`, default `/inventory.yml`
+(mounted by `docker/attack-range.compose.yml` from `ansible/inventory.yml`).
+Falls back to the generated inventory with a warning if the file is absent.
 
-**Why**: `local_ludus` is a persistent lab (Ludus owns the VMs and their
-lifetime), not a disposable per-build cloud stack. Upstream's
-`build_action()` always calls `prepare_config_from_template(..., generate_id=True)`,
-minting a fresh random UUID (and therefore a fresh `config/<uuid>.yml`,
-losing any previous `status: running`) on every single invocation of
-`attack_range.py build`.
+### 5. Continuous simulation (4 patches)
 
-**Where**: `attack_range.py::build_action` peeks at the resolved template's
-`general.cloud_provider` before calling `prepare_config_from_template`; if
-it's `local_ludus`, `generate_id=False` is passed instead, so the fixed
-`general.attack_range_id: local-ludus-range` baked into
-`templates/local_ludus/default.yml` is reused every time — re-running
-`scripts/start-attack-range.sh` (and therefore the seed `build` call) is a
-safe, idempotent no-op that just re-marks the same config as `running`.
+Upstream has **no** loop/scheduled mode — verified by grepping
+`continuous|loop|interval|schedule` across `attack_range/`, `api/` and
+`attack_range.py` on both `v5.0.0` and `develop`. These patches are ours
+to keep.
 
-### Patch 6 — Docker compose override
+| Patch | What |
+|---|---|
+| `simulate-flags` | adds `--loop`, `--random`, `--interval`, `--exclude` to the simulate subparser |
+| `simulate-allow-random` | stops the CLI hard-exiting on empty `--techniques` when `--random` was given |
+| `simulate-dispatch` | forwards the four new flags to `controller.simulate(...)` |
+| `simulate-loop` | renames the original `simulate` body to `_simulate_once` and wraps it in a loop that sleeps `--interval` minutes and, with `--random`, draws a technique from the Atomics index CSVs minus `--exclude` |
 
-**Where**: `docker/attack-range.compose.yml` in *this* repo (NOT in the
-fork). Sets host networking (so the container reaches lab VMs over the
-host's tailnet by MagicDNS) and mounts `ansible/inventory.yml` on both the
-`attack_range` and `api` services. Used as:
+Atomics index glob is overridable via `$ATOMICS_INDEX_GLOB`; default
+`/opt/atomic-red-team/atomics/Indexes/Indexes-CSV/*.csv`. Falls back to
+`T1082` with a warning if the index isn't present.
+
+### 6. Stable `attack_range_id` (1 patch)
+
+`build_action()` always passes `generate_id=True`, minting a fresh UUID on
+every `attack_range build`. `local_ludus` is a persistent lab, not a
+disposable cloud stack, so `fixed-id` peeks at the template and passes
+`generate_id=False` when `general.cloud_provider` is `local_ludus`, keeping
+the `attack_range_id` baked into
+`new-files/templates/local_ludus/default.yml` (`local-ludus-range`).
+
+That fixed id is what makes `scripts/start-attack-range.sh`'s seed `build`
+idempotent, and it's the id the UI sends in its `POST
+/attack-range/simulate` body.
+
+The peek uses `yaml.safe_load`, which `attack_range.py` already imports.
+(It must not use a `load_config` helper — no such name exists in `v5.0.0`,
+and inside the `except Exception` guard a `NameError` would silently turn
+this patch into a no-op.)
+
+## Not a patch: the compose override
+
+`docker/attack-range.compose.yml` lives in *this* repo, not the fork. It
+sets host networking (so the container resolves lab VMs over the host's
+tailnet by MagicDNS) and mounts `ansible/inventory.yml` at `/inventory.yml`
+on **both** the `attack_range` and `api` services.
+
+Both mounts matter: upstream tags the `attack_range` service
+`profiles: [cli]`, so `up -d` never starts it — the long-running service is
+`api`, and it's the one that needs `/inventory.yml` for the
+`static-inventory` short-circuit to have something to copy.
 
 ```bash
 docker compose \
@@ -175,33 +155,38 @@ docker compose \
   up -d
 ```
 
-Note the upstream `attack_range` service is tagged `profiles: [cli]` and
-never starts with `up -d` — it's invoked directly
+The CLI service is invoked directly instead
 (`docker compose ... run --rm attack_range <args>`), which is how
-`scripts/start-attack-range.sh` seeds the range (Patch 2) and how
-`scripts/start-continuous-sim.sh --laptop` drives the loop (Patch 4).
+`scripts/start-attack-range.sh` seeds the range and how
+`scripts/start-continuous-sim.sh --laptop` drives the loop.
 
-## Re-applying patches against a new Attack Range release
+## Following a new upstream release
 
 ```bash
-# 1. Bump the tag
-sed -i 's/ATTACK_RANGE_REF:=v5.0.0/ATTACK_RANGE_REF:=v5.X.Y/' attack_range_fork/bootstrap.sh
+# 1. Point at the new tag
+ATTACK_RANGE_REF=v5.1.0 attack_range_fork/bootstrap.sh
 
-# 2. Re-run bootstrap
-attack_range_fork/bootstrap.sh
-
-# 3. If apply-patches.py reports "WARN: literal text not found" for any
-#    patch, the upstream code drifted. Open the named file, find the
-#    equivalent location, and update the literal anchor in apply-patches.py
-#    to match the new source exactly (copy-paste from the real file rather
-#    than guessing/regexing — this pinned-version patcher trades generality
-#    for being trivially easy to verify against one specific tag).
-# 4. Re-run and confirm every line says OK, not WARN.
+# 2. If it aborts with PATCHING FAILED, the message names the exact file
+#    and pattern. Open the upstream file, find the equivalent code, update
+#    the Patch(...) entry in apply-patches.py, re-run.
 ```
 
-If you want to sanity-check the patched fork without touching real
-infrastructure, you can exercise the controller directly with a fake
-`/inventory.yml` and confirm `build()` marks a config `running` and
-`simulate()` reaches (and only fails at) the actual `ansible-playbook`
-network call — see the test transcript in this repo's PR history for an
-example harness.
+The patcher is string/regex based rather than a `.patch` file precisely so
+that unrelated churn (whitespace, neighbouring lines, import reordering)
+doesn't break it — only a change to the specific construct does.
+
+## Known upstream drift on `develop`
+
+`develop` is ~44 commits past `v5.0.0`. Things that would need pattern
+updates before you could pin to it:
+
+- `simulate()` became
+  `simulate(self, target, techniques=None, atomics=None, atomic_files=None) -> dict`
+- `build_vpn_phase` became a multi-line signature with a third
+  `terraform_running_callback` parameter
+- `BaseCloudProvider.update_backend_config(dict, ...)` was renamed to
+  `write_backend_config(BackendParams, ...)` and a new abstract
+  `get_backend_params()` was added — **this alone breaks
+  `local_ludus_provider.py`** until it implements the new method
+
+We stay on `v5.0.0` until there's a reason not to.
