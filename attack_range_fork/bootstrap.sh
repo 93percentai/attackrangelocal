@@ -38,7 +38,17 @@ fi
 
 # ----- 2. Apply the python-based patcher -----
 echo "Applying local_ludus patches via apply-patches.py..."
-python3 "${FORK_ROOT}/apply-patches.py" "$UPSTREAM"
+# apply-patches.py exits non-zero if ANY patch fails to land or if the
+# result isn't valid Python. Do not continue on failure: an unpatched
+# fork silently falls back to the AWS provider and tries to talk to a
+# cloud API that isn't there.
+if ! python3 "${FORK_ROOT}/apply-patches.py" "$UPSTREAM"; then
+  echo >&2
+  echo "ERROR: patching failed — refusing to leave a broken fork at $UPSTREAM" >&2
+  echo "       Upstream ($ATTACK_RANGE_REF) has probably changed shape." >&2
+  echo "       Fix the patterns in attack_range_fork/apply-patches.py, then re-run." >&2
+  exit 1
+fi
 
 # ----- 3. (Optional) apply any unified-diff patches -----
 if compgen -G "$PATCH_DIR/*.patch" > /dev/null; then
