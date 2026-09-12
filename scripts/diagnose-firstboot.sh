@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# First-boot / WiFi / Tailscale triage on the Proxmox host. Run as root.
+# First-boot / Tailscale triage on the Proxmox host. Run as root.
 set -euo pipefail
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,9 +34,6 @@ if [[ -f "$SECRETS" ]]; then
   # shellcheck disable=SC1090
   source "$SECRETS"
   set +a
-  echo "WIFI_ENABLE=${WIFI_ENABLE:-<unset>}"
-  echo "WIFI_SSID=${WIFI_SSID:-<unset>}"
-  echo "WIFI_COUNTRY=${WIFI_COUNTRY:-US}"
   echo "PROXMOX_FQDN=${PROXMOX_FQDN:-<unset>}"
   echo "TS_AUTHKEY set: $([[ -n "${TS_AUTHKEY:-}" ]] && echo yes || echo NO)"
   echo "TS_TAG=${TS_TAG:-<unset>}"
@@ -61,17 +58,8 @@ ip -4 route show
 
 section "Internet reachability"
 ping -c2 -W3 1.1.1.1 2>&1 || echo "no default-route ping to 1.1.1.1"
-WIFI_IF="$(iw dev 2>/dev/null | awk '$1=="Interface"{print $2; exit}')"
-if [[ -n "$WIFI_IF" ]]; then
-  ping -c2 -W3 -I "$WIFI_IF" 1.1.1.1 2>&1 || echo "WiFi bind-ping failed on $WIFI_IF"
-fi
 
-section "vmbr0 (WiFi NAT pivot?)"
-if grep -q 'vmbr0 reconfigured for WiFi NAT' /etc/network/interfaces 2>/dev/null; then
-  echo "vmbr0 NAT pivot: configured in /etc/network/interfaces"
-else
-  echo "vmbr0 NAT pivot: NOT applied yet"
-fi
+section "vmbr0"
 ip -4 addr show dev vmbr0 2>/dev/null || true
 
 section "Tailscale"
@@ -80,16 +68,6 @@ if command -v tailscale >/dev/null 2>&1; then
   tailscale status 2>&1 || true
 else
   echo "tailscale CLI not installed — install-tailscale-on-host phase never completed"
-fi
-
-section "WiFi (quick)"
-if [[ -n "$WIFI_IF" ]]; then
-  wpa_cli -i "$WIFI_IF" status 2>/dev/null || echo "wpa_cli failed"
-else
-  echo "no WiFi interface detected (iw dev)"
-fi
-if [[ -f "${REPO_ROOT}/scripts/diagnose-wifi.sh" ]]; then
-  bash "${REPO_ROOT}/scripts/diagnose-wifi.sh" "$WIFI_IF" 2>/dev/null || true
 fi
 
 section "Last 40 lines of first-boot log"
@@ -102,14 +80,11 @@ fi
 
 section "Likely next steps"
 cat <<'EOF'
-If phase stuck before setup-wifi-uplink:
-  - Keep ethernet plugged in; check /var/log/attackrangelocal-firstboot.log for git/apt errors
+If phase stuck early:
+  - Check ethernet is plugged in and has a DHCP lease
+  - Check /var/log/attackrangelocal-firstboot.log for git/apt errors
 
-If WiFi failed but wired works:
-  cd /opt/attackrangelocal && git pull origin main
-  bash scripts/repair-wifi-uplink.sh
-
-If WiFi works but Tailscale missing:
+If the uplink works but Tailscale is missing:
   source /var/lib/proxmox-firstboot/secrets.env
   curl -fsSL https://tailscale.com/install.sh | sh
   tailscale up --authkey="$TS_AUTHKEY" --hostname="${PROXMOX_FQDN%%.*}" \

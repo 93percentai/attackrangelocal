@@ -130,63 +130,6 @@ if [[ ! -f "$PROXMOX_ISO" ]]; then
   curl -fL --retry 4 -o "$PROXMOX_ISO" "$PROXMOX_ISO_URL"
 fi
 
-# ---------- 4b. Download WiFi firmware (only when WIFI_ENABLE=true) ----------
-# The first-boot wrapper is capped at 1 MiB, so we can't embed entire
-# firmware-*.deb files (50+ MiB total). We download Debian non-free
-# firmware .debs and xorriso-inject them at /firmware/ on the ISO so
-# first-boot can dpkg -i them offline (or fall back to apt over wired).
-FW_DEBS=()
-if [[ "${WIFI_ENABLE_NORM,,}" == "true" ]]; then
-  echo "==> WIFI_ENABLE=true — downloading firmware .debs for offline install..."
-  FW_CACHE="${CACHE_DIR}/firmware"
-  mkdir -p "$FW_CACHE"
-
-  # Resolve current filenames from the Debian non-free repo. The version
-  # is part of the filename, so we scrape the directory listing.
-  : "${FIRMWARE_URL_BASE:=https://deb.debian.org/debian/pool/non-free-firmware/f/firmware-nonfree}"
-  echo "    (catalog: $FIRMWARE_URL_BASE)"
-  FW_INDEX="$(curl -fsSL "$FIRMWARE_URL_BASE/" || echo "")"
-  for pkg in firmware-iwlwifi firmware-realtek firmware-atheros firmware-brcm80211 firmware-misc-nonfree; do
-    # Pick the latest .deb for that package (filename sort).
-    fn=$(echo "$FW_INDEX" \
-         | grep -oE "href=\"${pkg}_[^\"]+_all\\.deb\"" \
-         | sed 's/href="\(.*\)"/\1/' \
-         | sort -V | tail -1)
-    if [[ -z "$fn" ]]; then
-      echo "    WARN: could not resolve $pkg in $FIRMWARE_URL_BASE — skipping"
-      continue
-    fi
-    if [[ ! -f "$FW_CACHE/$fn" ]]; then
-      echo "    fetching $fn..."
-      curl -fL --retry 4 -o "$FW_CACHE/$fn" "$FIRMWARE_URL_BASE/$fn"
-    fi
-    FW_DEBS+=("$FW_CACHE/$fn")
-  done
-
-  echo "    bundled $(printf '%s\n' "${FW_DEBS[@]}" | wc -l) firmware .deb(s):"
-  printf '      %s\n' "${FW_DEBS[@]##*/}"
-
-  if [[ ${#FW_DEBS[@]} -eq 0 ]]; then
-    echo "ERROR: WIFI_ENABLE=true but no firmware .debs were downloaded." >&2
-    echo "       Check network access to ${FIRMWARE_URL_BASE:-deb.debian.org}." >&2
-    exit 1
-  fi
-  has_iwlwifi=0
-  for d in "${FW_DEBS[@]}"; do
-    [[ "$(basename "$d")" == firmware-iwlwifi_* ]] && has_iwlwifi=1
-  done
-  if [[ $has_iwlwifi -eq 0 ]]; then
-    echo "ERROR: WIFI_ENABLE=true but firmware-iwlwifi could not be resolved." >&2
-    echo "       Most laptops need Intel WiFi firmware — fix apt/catalog scrape." >&2
-    exit 1
-  fi
-  if ! command -v xorriso >/dev/null 2>&1; then
-    echo "ERROR: WIFI_ENABLE=true requires xorriso to inject firmware into the ISO." >&2
-    echo "       Install: apt install xorriso" >&2
-    exit 1
-  fi
-fi
-
 # ---------- 5. Validate the answer file ----------
 # NOTE: `validate-answer` in every PVE 9 PAI (verified on 9.0.9 - 9.2.8)
 # exits 0 even for malformed TOML and for deprecated keys. PAI 8.x exited
@@ -265,47 +208,7 @@ proxmox-auto-install-assistant prepare-iso \
   --on-first-boot "$WRAPPED_FB" \
   --output "$BASE_ISO"
 
-# ---------- 7b. Inject WiFi firmware via xorriso (only if WIFI_ENABLE=true) ----------
-# PAI doesn't let us add extra files. We post-process the ISO with xorriso
-# to add a /firmware/ tree (the .debs + a MANIFEST marker first-boot scans
-# for) while preserving the El Torito boot record.
-if [[ "${WIFI_ENABLE_NORM,,}" == "true" && ${#FW_DEBS[@]} -gt 0 ]]; then
-  echo "==> Injecting ${#FW_DEBS[@]} firmware .deb(s) into ISO..."
-  STAGE="${BUILD_DIR}/firmware-stage"
-  rm -rf "$STAGE"
-  mkdir -p "$STAGE/firmware"
-  for d in "${FW_DEBS[@]}"; do cp "$d" "$STAGE/firmware/"; done
-  # MANIFEST is the marker first-boot's media-scan looks for.
-  cat > "$STAGE/firmware/MANIFEST" <<EOF
-# attackrangelocal firmware bundle
-# built: $(date -u +%FT%TZ)
-# range: ${RANGE_ID}
-$(cd "$STAGE/firmware" && sha256sum *.deb)
-EOF
-
-  # Copy the PAI-built ISO to the final location first, then add /firmware/
-  # in place. -boot_image any keep preserves PAI's GRUB + El Torito records.
-  # -commit flushes the modified session to disk.
-  cp "$BASE_ISO" "$OUT_ISO"
-  xorriso \
-    -dev "$OUT_ISO" \
-    -boot_image any keep \
-    -map "$STAGE/firmware" /firmware \
-    -commit 2>&1 \
-    | tail -8
-
-  if ! xorriso -indev "$OUT_ISO" -find /firmware/MANIFEST 2>/dev/null \
-       | grep -q "/firmware/MANIFEST"; then
-    echo "ERROR: firmware injection didn't land on the ISO" >&2
-    exit 1
-  fi
-
-  rm -rf "$STAGE" "$BASE_ISO"
-  echo "    ISO post-processed; firmware .debs visible at /firmware/ on the disc."
-else
-  # No firmware bundle requested — just rename the PAI output.
-  mv "$BASE_ISO" "$OUT_ISO"
-fi
+mv "$BASE_ISO" "$OUT_ISO"
 
 # ---------- 8. Hash + flash instructions ----------
 echo

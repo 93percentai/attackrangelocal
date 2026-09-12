@@ -38,7 +38,7 @@ Use the wizard unless you're scripting a repeatable build (e.g. CI) —
 |---|---|
 | OS | Debian/Ubuntu recommended (Fedora/RHEL/Arch work — see package substitutions in the [README](../README.md#quick-start)). macOS is **not** supported (needs Linux `xorriso` + `dd`) — use a Linux VM or WSL2. |
 | Disk space | ≥ 4 GB free (Proxmox ISO ~1.5 GB cached + build output ~1.5 GB + payload) |
-| Network | Reachable `enterprise.proxmox.com` (ISO download) and `deb.debian.org` (only if `WIFI_ENABLE=true`, for firmware blobs) |
+| Network | Reachable `enterprise.proxmox.com` (ISO download) |
 | Tools | `proxmox-auto-install-assistant`, `envsubst` (gettext-base), `curl`, `tar`, `rsync`, `xorriso`, `sha256sum`, `openssl` |
 
 The wizard's pre-flight check (`scripts/build-iso-wizard.sh`) verifies all of
@@ -58,8 +58,7 @@ decide this before you start collecting values.
 Both modes additionally require:
 
 - **x86_64** CPU, PassMark score > 6,000
-- **Wired ethernet** for the ~15-minute Proxmox install phase, even if you
-  plan to run on WiFi afterward (see [optional values](#optional-values) below)
+- **Wired ethernet** — required for the install and for the whole bootstrap
 - A target disk the installer can wipe entirely — see `DISK_DEVICE`
   below for how to identify it
 
@@ -119,11 +118,6 @@ mid-run. Grouped in the same order the wizard asks for them.
 
 | Value | Spec | Where to get it | Notes |
 |---|---|---|---|
-| `WIFI_ENABLE` | `true`/`false` | Your choice | Only for laptop deployments where the target reaches the internet via WiFi post-install. The Proxmox installer itself **always** needs wired ethernet for the initial ~15 min (USB-ethernet dongle or phone tether works). |
-| `WIFI_SSID` / `WIFI_PASSWORD` | SSID ≤ 32 chars, WPA2-PSK | Your network credentials | Required only if `WIFI_ENABLE=true` |
-| `WIFI_COUNTRY` | 2-letter ISO code, uppercase | Your regulatory domain, e.g. `US`, `GB`, `DE` | Wrong value can disable channels your AP uses |
-| `WIFI_INTERFACE` | e.g. `wlp2s0` or empty | Leave empty to auto-detect via `iw dev`; set explicitly if the box has multiple radios |
-| `WIFI_DISABLE_WIRED_AFTER_BOOT` | `true`/`false` | Your choice | `true` if the wired NIC was a temporary dongle you'll unplug |
 | `NOTIFY_WEBHOOK` | `https://...` or empty | Slack/Discord "Incoming Webhook" URL | Posts phase-transition pings during the ~3 h unattended build |
 | `SIM_INTERVAL_MINUTES` | Positive integer | Your choice, default `30` | Laptop-side `simulate --loop` cadence |
 | `SIM_EXCLUDE` | Comma-separated MITRE T-IDs | Default excludes destructive techniques (`T1485,T1486,T1490,T1491,T1561,T1565,T1529,T1499,T1496`) | Edit only if you want different exclusions |
