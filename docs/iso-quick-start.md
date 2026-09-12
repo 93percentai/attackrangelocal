@@ -39,7 +39,7 @@ Use the wizard unless you're scripting a repeatable build (e.g. CI) —
 | OS | Debian/Ubuntu recommended (Fedora/RHEL/Arch work — see package substitutions in the [README](../README.md#quick-start)). macOS is **not** supported (needs Linux `xorriso` + `dd`) — use a Linux VM or WSL2. |
 | Disk space | ≥ 4 GB free (Proxmox ISO ~1.5 GB cached + build output ~1.5 GB + payload) |
 | Network | Reachable `enterprise.proxmox.com` (ISO download) |
-| Tools | `proxmox-auto-install-assistant`, `envsubst` (gettext-base), `curl`, `tar`, `rsync`, `xorriso`, `sha256sum`, `openssl` |
+| Tools | `proxmox-auto-install-assistant` (install with `sudo scripts/install-pai.sh`), `envsubst` (gettext-base), `curl`, `tar`, `rsync`, `xorriso`, `sha256sum`, `openssl` |
 
 The wizard's pre-flight check (`scripts/build-iso-wizard.sh`) verifies all of
 this for you and prints the exact install command for anything missing —
@@ -179,6 +179,31 @@ error, etc.) and tells you the fix. If you're calling `iso/build-iso.sh`
 directly, match the error text against the diagnosis list at the bottom of
 `scripts/build-iso-wizard.sh`, or re-run through the wizard to get the
 decoded version.
+
+### `proxmox-auto-install-assistant` won't install
+
+```
+Depends: libc6 (>= 2.39) but 2.35-0ubuntu3.13 is to be installed
+Depends: libssl3t64 (>= 3.0.0) but it is not installable
+Depends: libzstd1 (>= 1.5.5) but 1.4.8+dfsg-3build1 is to be installed
+```
+
+You fetched Proxmox's **trixie** build on a distro older than Debian 13 /
+Ubuntu 24.04. That build is compiled against glibc 2.39; Ubuntu 22.04 ships
+2.35, and `libssl3t64` does not exist there at all. Nothing is held or
+broken — the package simply cannot run on that system.
+
+Use `sudo scripts/install-pai.sh`, which reads your glibc version and picks
+the **bookworm** build (PAI 8.4.6, needs only glibc >= 2.34) when the trixie
+one won't run.
+
+The major versions do **not** have to match: PAI 8.4.6 bakes a PVE 9.2 ISO
+correctly — `answer.toml`, `auto-installer-capable`,
+`auto-installer-mode.toml` and `proxmox-first-boot` all land on the output
+ISO. The one difference is that 8.x doesn't flag deprecated snake_case
+answer keys, so `iso/build-iso.sh` prints a note saying that part of its
+validation gate is inert. `iso/answer.toml.j2` is kebab-case already, so it
+only matters if you hand-edit it.
 
 ## Where to go next
 

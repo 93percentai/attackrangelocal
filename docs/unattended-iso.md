@@ -69,11 +69,8 @@ attacks firing": **~3 hours** on a 32 GB host.
 
 ```bash
 # On your laptop (Debian/Ubuntu recommended).
-# PAI must match the Proxmox major version you build:
-#   PVE 9.x -> trixie repo     PVE 8.x -> bookworm repo
-curl -fsSLo /tmp/paia.deb \
-  http://download.proxmox.com/debian/pve/dists/trixie/pve-no-subscription/binary-amd64/proxmox-auto-install-assistant_9.2.8_amd64.deb
-sudo apt install -y /tmp/paia.deb gettext-base
+sudo apt install -y gettext-base
+sudo scripts/install-pai.sh
 
 cp ludus/.env.example .env
 $EDITOR .env                # fill in every REPLACE_ME

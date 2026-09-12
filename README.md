@@ -26,9 +26,10 @@ cd attackrangelocal
 # 2. Install build dependencies
 sudo apt update && sudo apt install -y \
     gettext-base curl tar rsync coreutils xorriso openssl
-curl -fsSLo /tmp/paia.deb \
-  http://download.proxmox.com/debian/pve/dists/trixie/pve-no-subscription/binary-amd64/proxmox-auto-install-assistant_9.2.8_amd64.deb
-sudo apt install -y /tmp/paia.deb && rm /tmp/paia.deb
+# Installs proxmox-auto-install-assistant, picking the build your glibc can
+# run. Don't grab the trixie .deb by hand — it needs glibc >= 2.39 and fails
+# to install on Ubuntu 22.04 and older.
+sudo scripts/install-pai.sh
 
 # 3. Run the wizard
 ./scripts/build-iso-wizard.sh

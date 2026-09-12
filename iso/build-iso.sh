@@ -68,8 +68,20 @@ done
 
 if ! command -v proxmox-auto-install-assistant >/dev/null 2>&1; then
   echo "proxmox-auto-install-assistant not found." >&2
-  echo "Install on Debian/Ubuntu: sudo apt install proxmox-auto-install-assistant" >&2
+  echo "Install it with: sudo scripts/install-pai.sh" >&2
+  echo "(It picks the build your glibc can run — Proxmox's trixie .deb needs" >&2
+  echo " glibc >= 2.39 and will not install on Ubuntu 22.04 or older.)" >&2
   exit 1
+fi
+# PAI 8.x bakes PVE 9 ISOs correctly, but it does not warn about deprecated
+# snake_case answer keys, so the deprecation check below cannot fire. Say so
+# rather than implying the full gate ran.
+PAI_VERSION="$(proxmox-auto-install-assistant --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+if [[ "${PAI_VERSION%%.*}" == "8" ]]; then
+  echo "NOTE: proxmox-auto-install-assistant ${PAI_VERSION} (8.x) builds PVE 9 ISOs"
+  echo "      fine, but it does not flag deprecated snake_case answer keys, so"
+  echo "      that part of the validation gate is inert. answer.toml.j2 ships"
+  echo "      kebab-case, so this only matters if you hand-edit it."
 fi
 if ! command -v envsubst >/dev/null 2>&1; then
   echo "envsubst not found (apt install gettext-base)" >&2

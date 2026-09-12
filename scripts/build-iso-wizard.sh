@@ -79,12 +79,12 @@ preflight() {
     else
       warn "proxmox-auto-install-assistant not on PATH"
     fi
-    note "Required to bake the ISO. Fetch the .deb directly (simplest):"
-    note "  curl -fsSLo /tmp/paia.deb \\"
-    note "    http://download.proxmox.com/debian/pve/dists/trixie/pve-no-subscription/binary-amd64/proxmox-auto-install-assistant_9.2.8_amd64.deb"
-    note "  sudo apt install -y /tmp/paia.deb"
-    note "NOTE: the PAI major version must match the Proxmox ISO you build:"
-    note "      PVE 9.x -> trixie repo    PVE 8.x -> bookworm repo"
+    note "Required to bake the ISO. Install it with:"
+    note "  sudo scripts/install-pai.sh"
+    note "That picks the build your glibc can run. Proxmox's trixie .deb needs"
+    note "glibc >= 2.39, so on Ubuntu 22.04 and older it refuses to install"
+    note "(\"Depends: libc6 (>= 2.39)\"); the bookworm build is used instead and"
+    note "bakes PVE 9 ISOs fine."
     note "Or build from source: https://git.proxmox.com/?p=pve-installer.git"
     [[ "$MODE" != "dry-run" ]] && fail=1
   fi
@@ -448,7 +448,13 @@ do_build() {
   hdr "Build failed — diagnosis"
   if grep -q 'proxmox-auto-install-assistant: command not found' "$log"; then
     err "proxmox-auto-install-assistant is missing."
-    note "Install per the pre-flight instructions above."
+    note "Install it with:  sudo scripts/install-pai.sh"
+  elif grep -qE 'libc6 \(>= 2\.39\)|libssl3t64' "$log"; then
+    err "The trixie proxmox-auto-install-assistant .deb can't run on this distro."
+    note "It needs glibc >= 2.39 (Debian 13 / Ubuntu 24.04+); nothing is broken"
+    note "or held back. Run:  sudo scripts/install-pai.sh"
+    note "That falls back to the bookworm build (glibc >= 2.34), which bakes"
+    note "PVE 9 ISOs correctly."
   elif grep -qi 'Could not resolve host: enterprise.proxmox.com' "$log"; then
     err "DNS / network unable to reach enterprise.proxmox.com."
     note "Check internet connectivity. Behind a proxy? Set HTTPS_PROXY before re-running."
