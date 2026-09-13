@@ -24,16 +24,17 @@ the official Proxmox ISO.
 
 ### Stage B — First-boot bootstrap
 
-`iso/build-iso.sh` generates a wrapper around `iso/first-boot.sh` that
-embeds your `secrets.env` (~1 KB, base64) plus a `REPO_URL`/`REPO_REF` pin,
-and PAI bakes that wrapper onto the ISO. A systemd oneshot unit runs it
-**once** after install. Phases, in order:
+`iso/build-iso.sh` generates a wrapper around `iso/first-boot.sh` that embeds
+your `secrets.env` (~1 KB) **and the whole repo** (~150 KB gzipped, ~200 KB
+base64'd — about 20% of PAI's 1 MiB first-boot limit), and PAI bakes that
+wrapper onto the ISO. A systemd oneshot unit runs it **once** after install.
+Phases, in order:
 
 | # | Phase | What |
 |---|---|---|
-| 1 | `wait-for-network` | ping until the uplink is live |
-| 2 | `install-git` | `apt-get install git` (not in the PVE base image) |
-| 3 | `clone-repo` | `git clone` this repo at the pinned `REPO_REF`, drop in `.env` |
+| 1 | `unpack-repo` | untar the embedded repo to `/opt/attackrangelocal`, drop in `.env` |
+| 2 | `wait-for-network` | ping until the uplink is live |
+| 3 | `install-git` | `apt-get install git vim` — for ansible-galaxy and the Ludus installer |
 | 4 | `install-tailscale-on-host` | join the tailnet → you can SSH in from ~minute 3 |
 | 5 | `install-ludus` | `scripts/bootstrap-ludus.sh` |
 | 6 | `install-roles-and-templates` | Galaxy roles + Ludus template build (~60–90 min, the long pole) |
@@ -44,9 +45,25 @@ and PAI bakes that wrapper onto the ISO. A systemd oneshot unit runs it
 | 11 | `start-continuous-simulation` | Atomic Runner service on win-client1 |
 | 12 | `range-up-continuous-sim-running` | done; unit disables itself |
 
-The repo is **git-cloned at first boot**, not shipped in the ISO: PAI caps
-the first-boot executable at 1 MiB, which the repo far exceeds. Pinning
-`REPO_REF` to the build-time commit keeps deploys reproducible.
+The repo ships **inside the ISO**, not cloned at boot. That means:
+
+- the code that runs is byte-for-byte the code you built the ISO from —
+  there is no ref to pin, push, or verify, and no window in which someone
+  else's push changes what your USB deploys
+- uncommitted edits in your working tree ship too. `build-iso.sh` tars the
+  working tree deliberately: if you changed a script and built an ISO from
+  it, you meant to deploy that change. It prints whether the tree was dirty
+  and records it in `/opt/attackrangelocal/.build-info`
+- `unpack-repo` runs **before** `wait-for-network`, so
+  `scripts/diagnose-firstboot.sh` is on disk even if the uplink never comes
+  up and every later phase fails
+- the build verifies the payload before baking: the tarball must survive the
+  base64 round-trip byte-for-byte, untar cleanly, and still contain the six
+  scripts first-boot calls, with their executable bits intact
+
+Internet is still required *after* this point — Tailscale, Ludus, the Galaxy
+roles and the Windows templates are all fetched during bootstrap. Embedding
+the repo only removes the clone.
 
 If phase 8 or 9 fails, first-boot **halts before lockdown** (phase
 `abort-before-lockdown`) rather than cutting egress on a half-built lab —

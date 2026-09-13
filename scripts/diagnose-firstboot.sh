@@ -41,12 +41,18 @@ else
   echo "MISSING $SECRETS"
 fi
 
-section "Repo clone"
-if [[ -d /opt/attackrangelocal/.git ]]; then
-  git -C /opt/attackrangelocal rev-parse --short HEAD 2>/dev/null || true
-  git -C /opt/attackrangelocal log -1 --oneline 2>/dev/null || true
+section "Payload"
+# The repo is unpacked from the ISO, not cloned, so there is no .git here.
+# iso/build-iso.sh stamps what it was built from into .build-info.
+if [[ -d /opt/attackrangelocal ]]; then
+  echo "files: $(find /opt/attackrangelocal -type f | wc -l)"
+  if [[ -f /opt/attackrangelocal/.build-info ]]; then
+    cat /opt/attackrangelocal/.build-info
+  else
+    echo "no .build-info — payload may predate the embedded-repo change"
+  fi
 else
-  echo "MISSING /opt/attackrangelocal — clone-repo phase likely failed"
+  echo "MISSING /opt/attackrangelocal — unpack-repo phase likely failed"
 fi
 
 section "Network interfaces"

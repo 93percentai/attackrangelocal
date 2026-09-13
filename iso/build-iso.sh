@@ -97,35 +97,70 @@ envsubst < "${ISO_DIR}/answer.toml.j2" > "${BUILD_DIR}/answer.toml"
 cp "$ENV_FILE" "${PAYLOAD_STAGE}/secrets.env"
 chmod 600 "${PAYLOAD_STAGE}/secrets.env"
 
-# ---------- 3. Resolve the git ref to pin the wrapper to ----------
-# The wrapped first-boot script `git clone`s the repo and checks out this
-# exact commit, so the deployed range matches the one that built the ISO.
-echo "==> Resolving git ref for reproducible deploy..."
-: "${REPO_URL:=$(git -C "${REPO_ROOT}" config --get remote.origin.url 2>/dev/null || true)}"
-# Translate sandbox proxy URLs to the canonical GitHub URL if applicable.
-case "$REPO_URL" in
-  *93percentai/attackrangelocal*) REPO_URL="https://github.com/93percentai/attackrangelocal.git" ;;
-  *dgxn4/attackrangelocal*)       REPO_URL="https://github.com/93percentai/attackrangelocal.git" ;;
-esac
-: "${REPO_URL:=https://github.com/93percentai/attackrangelocal.git}"
-: "${REPO_REF:=$(git -C "${REPO_ROOT}" rev-parse HEAD 2>/dev/null || true)}"
-if [[ -z "$REPO_REF" ]]; then
-  REPO_REF=main
-  echo "WARN: not a git checkout — pinning first-boot to REPO_REF=main" >&2
-  echo "       Clone with git for a reproducible deploy, or set REPO_REF explicitly." >&2
-fi
-echo "    repo: $REPO_URL"
-echo "    ref:  $REPO_REF"
-if [[ "$REPO_REF" != "main" && "$REPO_REF" != "master" ]]; then
-  if git ls-remote "$REPO_URL" "refs/heads/${REPO_REF}" "refs/tags/${REPO_REF}" "${REPO_REF}" 2>/dev/null \
-    | grep -q .; then
-    echo "    ref verified on remote"
-  else
-    echo "ERROR: REPO_REF=${REPO_REF} not found on ${REPO_URL}" >&2
-    echo "       Push your branch/commit before building the ISO, or set REPO_REF=main." >&2
-    exit 1
+# ---------- 3. Pack the repo into the payload ----------
+# The whole repo rides along inside the first-boot script, so the target box
+# never clones anything: what you built is exactly what runs, and the ISO
+# works on a host that cannot reach GitHub.
+#
+# This is only possible because the repo is small. Sizes as of writing:
+#   repo.tar.gz  ~150 KB   ->  base64  ~200 KB   =  ~19% of PAI's 1 MiB cap
+# The size guard further down fails the build if that ever stops being true.
+#
+# We tar the WORKING TREE, not `git archive HEAD`, so uncommitted edits ship
+# too -- if you changed a script and are building an ISO from it, you meant
+# to deploy that change. It also means the build works outside a git
+# checkout (e.g. from the released tarball).
+echo "==> Packing repo into the first-boot payload..."
+REPO_TGZ="${BUILD_DIR}/repo.tar.gz"
+
+# WHICH files ship matters as much as how. .gitignore lists things that must
+# never leave this machine -- ludus/splunk-users.yml (plaintext passwords),
+# rendered range-config.yml / inventory.yml, *.pem, *.key, **/secrets.env.
+# An --exclude list has to re-state all of that and silently ships anything
+# it forgets, so drive the file list from git instead: `git ls-files` is
+# exactly "tracked, therefore not ignored".
+#
+# tar reads the WORKING TREE copy of each listed path, so uncommitted edits
+# to tracked files do ship -- if you changed a script and are building an ISO
+# from it, you meant to deploy that change. Brand-new untracked files do not;
+# the build warns about them so it is never a silent surprise.
+if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  UNTRACKED="$(git -C "$REPO_ROOT" ls-files --others --exclude-standard)"
+  if [[ -n "$UNTRACKED" ]]; then
+    echo "    WARN: untracked files will NOT be in the ISO payload:" >&2
+    printf '      %s\n' $UNTRACKED >&2
+    echo "      (git add them if they should ship)" >&2
   fi
+  git -C "$REPO_ROOT" ls-files -z \
+    | tar -C "$REPO_ROOT" --null -T - -czf "$REPO_TGZ"
+else
+  # Released tarball / no git. Fall back to explicit excludes, mirroring
+  # every secret pattern in .gitignore.
+  echo "    (not a git checkout — using the exclude list)"
+  tar -C "$REPO_ROOT" -czf "$REPO_TGZ" \
+    --exclude='./.git' --exclude='./.env' --exclude='./ludus/.env' \
+    --exclude='*secrets.env' --exclude='*.pem' --exclude='*.key' \
+    --exclude='./ssh-keys' --exclude='./ludus/splunk-users.yml' \
+    --exclude='./ansible/splunk-users.yml' \
+    --exclude='./ludus/range-config.yml' --exclude='./ansible/inventory.yml' \
+    --exclude='./iso/cache' --exclude='./iso/build' --exclude='*.iso' \
+    --exclude='./ui/node_modules' --exclude='./ui/dist' --exclude='./ui/.astro' \
+    --exclude='./attack_range_fork/upstream' --exclude='__pycache__' \
+    --exclude='*.log' \
+    .
 fi
+
+# Provenance: .git does not ship, so record what this was built from.
+# scripts/diagnose-firstboot.sh reads this on the target box.
+GIT_DESC="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo 'not-a-git-checkout')"
+GIT_BRANCH="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+  GIT_DIRTY=" (working tree had uncommitted changes -- they ARE in this ISO)"
+else
+  GIT_DIRTY=""
+fi
+echo "    source: ${GIT_BRANCH} @ ${GIT_DESC}${GIT_DIRTY}"
+echo "    payload: $(du -h "$REPO_TGZ" | cut -f1) ($(stat -c '%s' "$REPO_TGZ") bytes)"
 
 # ---------- 4. Download Proxmox ISO (cached) ----------
 # Pinned to a specific Proxmox VE release for reproducible builds.
@@ -171,15 +206,15 @@ if ! printf '%s' "$VALIDATE_OUT" | grep -q 'parsed successfully'; then
 fi
 
 # ---------- 6. Build the first-boot wrapper ----------
-# PAI's prepare-iso accepts ONE first-boot executable, max 1 MiB. We can't
-# embed the whole repo there, so the wrapper:
-#   1. Drops the secrets.env (~1 KB) into /var/lib/proxmox-firstboot/
-#   2. Exports REPO_URL + REPO_REF for the inlined first-boot body
-#   3. Runs the first-boot body which `git clone`s and proceeds
-# Total wrapper size: ~10 KB, well under the 1 MiB cap.
+# PAI's prepare-iso accepts ONE first-boot executable, max 1 MiB. Everything
+# the target box needs goes in it:
+#   1. secrets.env (~1 KB)  -> /var/lib/proxmox-firstboot/secrets.env
+#   2. the repo tarball     -> /var/lib/proxmox-firstboot/repo.tar.gz
+#   3. a provenance stamp   -> /var/lib/proxmox-firstboot/build-info
+#   4. the inlined first-boot body, which unpacks (2) and proceeds
+# No git clone, no REPO_URL/REPO_REF, no network needed to obtain the code.
 echo "==> Building first-boot wrapper..."
 WRAPPED_FB="${BUILD_DIR}/first-boot-wrapped.sh"
-SECRETS_B64=$(base64 -w0 "${PAYLOAD_STAGE}/secrets.env")
 {
   echo '#!/usr/bin/env bash'
   echo "# Generated by iso/build-iso.sh on $(date -u +%FT%TZ)"
@@ -187,26 +222,96 @@ SECRETS_B64=$(base64 -w0 "${PAYLOAD_STAGE}/secrets.env")
   echo 'set -euo pipefail'
   echo
   echo 'mkdir -p /var/lib/proxmox-firstboot'
-  echo "echo '$SECRETS_B64' | base64 -d > /var/lib/proxmox-firstboot/secrets.env"
+  echo
+  echo '# --- operator .env, baked at build time ---'
+  echo "base64 -d > /var/lib/proxmox-firstboot/secrets.env <<'SECRETS_B64_EOF'"
+  base64 "${PAYLOAD_STAGE}/secrets.env"
+  echo 'SECRETS_B64_EOF'
   echo 'chmod 600 /var/lib/proxmox-firstboot/secrets.env'
   echo
-  echo "export REPO_URL='$REPO_URL'"
-  echo "export REPO_REF='$REPO_REF'"
+  echo '# --- the repo itself, baked at build time ---'
+  echo "base64 -d > /var/lib/proxmox-firstboot/repo.tar.gz <<'REPO_B64_EOF'"
+  base64 "$REPO_TGZ"
+  echo 'REPO_B64_EOF'
+  echo
+  echo "cat > /var/lib/proxmox-firstboot/build-info <<'BUILD_INFO_EOF'"
+  echo "built:  $(date -u +%FT%TZ)"
+  echo "branch: ${GIT_BRANCH}"
+  echo "commit: ${GIT_DESC}"
+  echo "dirty:  $([[ -n "$GIT_DIRTY" ]] && echo yes || echo no)"
+  echo "range:  ${RANGE_ID}"
+  echo 'BUILD_INFO_EOF'
   echo
   echo '# --- inlined iso/first-boot.sh body ---'
   # Skip the template's shebang + initial `set -euo pipefail`.
   sed '1,/^set -euo pipefail$/d' "${ISO_DIR}/first-boot.sh"
 } > "$WRAPPED_FB"
 chmod +x "$WRAPPED_FB"
-echo "    Wrapper: $WRAPPED_FB  ($(du -h "$WRAPPED_FB" | cut -f1))"
 
-# Pre-flight check the size limit so we fail clearly instead of via PAI.
+# Pre-flight the size limit so we fail clearly instead of via PAI.
 WRAPPER_BYTES=$(stat -c '%s' "$WRAPPED_FB")
+WRAPPER_PCT=$(( WRAPPER_BYTES * 100 / 1048576 ))
+echo "    Wrapper: $WRAPPED_FB"
+echo "             ${WRAPPER_BYTES} bytes — ${WRAPPER_PCT}% of PAI's 1 MiB cap"
 if [[ $WRAPPER_BYTES -gt 1048576 ]]; then
   echo "ERROR: wrapper is ${WRAPPER_BYTES} bytes; PAI caps first-boot at 1 MiB" >&2
-  echo "       (likely cause: secrets.env grew unexpectedly)" >&2
+  echo "       The embedded repo tarball is the big contributor. Either trim" >&2
+  echo "       what section 3 packs (add --exclude patterns), or go back to" >&2
+  echo "       fetching the repo at first boot." >&2
   exit 1
 fi
+if [[ $WRAPPER_PCT -gt 70 ]]; then
+  echo "WARN: wrapper is at ${WRAPPER_PCT}% of the 1 MiB cap — getting tight." >&2
+fi
+
+# Prove the payload survives the base64 round-trip before we bake it into an
+# ISO that takes ~3 hours to find out otherwise.
+echo "==> Verifying embedded payload round-trips..."
+VERIFY_DIR="${BUILD_DIR}/verify"
+rm -rf "$VERIFY_DIR"; mkdir -p "$VERIFY_DIR"
+sed -n "/^base64 -d > \/var\/lib\/proxmox-firstboot\/repo.tar.gz <<'REPO_B64_EOF'$/,/^REPO_B64_EOF$/p" \
+  "$WRAPPED_FB" | sed '1d;$d' | base64 -d > "${VERIFY_DIR}/repo.tar.gz"
+if ! cmp -s "$REPO_TGZ" "${VERIFY_DIR}/repo.tar.gz"; then
+  echo "ERROR: repo tarball does not survive the base64 round-trip." >&2
+  exit 1
+fi
+if ! tar -tzf "${VERIFY_DIR}/repo.tar.gz" >/dev/null 2>&1; then
+  echo "ERROR: embedded repo tarball is not a readable tar.gz." >&2
+  exit 1
+fi
+# The scripts first-boot calls must actually be in there, and executable.
+tar -xzf "${VERIFY_DIR}/repo.tar.gz" -C "$VERIFY_DIR"
+for f in scripts/bootstrap-ludus.sh scripts/install-roles.sh \
+         scripts/deploy-range.sh scripts/install-monitoring.sh \
+         scripts/lock-down.sh scripts/start-continuous-sim.sh; do
+  if [[ ! -f "${VERIFY_DIR}/${f}" ]]; then
+    echo "ERROR: embedded payload is missing ${f}" >&2
+    exit 1
+  fi
+  if [[ ! -x "${VERIFY_DIR}/${f}" ]]; then
+    echo "ERROR: ${f} lost its executable bit in the payload" >&2
+    exit 1
+  fi
+done
+# Belt-and-braces: whatever packed this, nothing secret may be inside. The
+# ISO already carries secrets.env by design; it must not ALSO carry an
+# operator's private keys or plaintext password files.
+# Anchored to the exact paths .gitignore protects. Deliberately NOT a loose
+# match on basenames: ansible/splunk-users.yml is a playbook, and the .j2
+# templates next to range-config.yml / inventory.yml must ship.
+LEAKS="$(tar -tzf "${VERIFY_DIR}/repo.tar.gz" | sed 's|^\./||' | grep -E \
+  '^\.env$|^ludus/\.env$|(^|/)secrets\.env$|\.pem$|\.key$|^ssh-keys/|^ludus/splunk-users\.yml$|^ludus/range-config\.yml$|^ansible/inventory\.yml$' \
+  || true)"
+if [[ -n "$LEAKS" ]]; then
+  echo "ERROR: secret-looking files made it into the ISO payload:" >&2
+  printf '       %s\n' $LEAKS >&2
+  echo "       Refusing to bake them into an ISO. They are .gitignore'd for a" >&2
+  echo "       reason; if one is genuinely needed, exclude it explicitly and" >&2
+  echo "       pass it through secrets.env instead." >&2
+  exit 1
+fi
+echo "    payload verified: $(tar -tzf "${VERIFY_DIR}/repo.tar.gz" | wc -l) entries, exec bits intact"
+rm -rf "$VERIFY_DIR"
 
 # ---------- 7. Bake the ISO ----------
 DATE_TAG="$(date +%Y%m%d)"

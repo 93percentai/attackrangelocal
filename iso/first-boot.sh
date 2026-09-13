@@ -10,10 +10,12 @@
 # IMPORTANT: this file is a TEMPLATE. iso/build-iso.sh generates the real
 # script (first-boot-wrapped.sh) by prepending:
 #   - An embedded `secrets.env` (your .env contents)
-#   - A `REPO_REF` pin (git SHA of the repo state at build time)
-# and then inlining the rest of THIS file. The wrapper is < 1 MiB so it
-# fits PAI's first-boot size limit; the repo itself is git-cloned during
-# first-boot from REPO_URL@REPO_REF for reproducible deploys.
+#   - An embedded `repo.tar.gz` (this whole repo, base64'd)
+#   - A `build-info` provenance stamp
+# and then inlining the rest of THIS file. All of it fits inside PAI's 1 MiB
+# first-boot limit (~20% of it), so the target box never clones anything:
+# the code that runs is byte-for-byte the code the ISO was built from, and
+# first-boot works even if the host cannot reach GitHub.
 #
 # Logs to /var/log/attackrangelocal-firstboot.log (also visible via
 # `journalctl -u proxmox-first-boot`).
@@ -36,6 +38,36 @@ phase() {
       "${NOTIFY_WEBHOOK}" >/dev/null 2>&1 || true
   fi
 }
+
+phase unpack-repo
+# The repo was baked into this script by iso/build-iso.sh -- no clone, so
+# this works before the network is up. Doing it first means the diagnostic
+# tooling (scripts/diagnose-firstboot.sh) is on disk even if every later
+# phase fails.
+REPO_TGZ=/var/lib/proxmox-firstboot/repo.tar.gz
+if [[ ! -f "$REPO_TGZ" ]]; then
+  echo "FATAL: $REPO_TGZ missing — the first-boot wrapper was not generated" >&2
+  echo "       by iso/build-iso.sh, or was truncated." >&2
+  exit 1
+fi
+rm -rf "$PAYLOAD_DIR"
+mkdir -p "$PAYLOAD_DIR"
+tar -xzf "$REPO_TGZ" -C "$PAYLOAD_DIR"
+if [[ ! -x "$PAYLOAD_DIR/scripts/bootstrap-ludus.sh" ]]; then
+  echo "FATAL: payload unpacked but scripts/bootstrap-ludus.sh is missing or" >&2
+  echo "       not executable — refusing to continue on a broken payload." >&2
+  exit 1
+fi
+cp -f /var/lib/proxmox-firstboot/build-info "$PAYLOAD_DIR/.build-info" 2>/dev/null || true
+echo "Unpacked $(tar -tzf "$REPO_TGZ" | wc -l) files to $PAYLOAD_DIR"
+
+# secrets.env was written by the wrapper before this script's main body ran.
+# Source it for the rest of the phases, and drop it into the payload as .env
+# so deploy-range.sh / install-monitoring.sh find it.
+if [[ -f "$SECRETS_FILE" ]]; then
+  set -a; source "$SECRETS_FILE"; set +a
+  install -m 600 "$SECRETS_FILE" "$PAYLOAD_DIR/.env"
+fi
 
 phase wait-for-network
 until ping -c1 -W2 1.1.1.1 >/dev/null 2>&1; do sleep 2; done
@@ -67,27 +99,11 @@ EOF
 ensure_pve_apt_no_subscription
 
 phase install-git
-# Proxmox VE base image doesn't ship git or vim; install before cloning.
+# Not needed for the payload any more (it is embedded), but ansible-galaxy
+# and the Ludus installer both shell out to git, and vim is a courtesy for
+# whoever SSHes in to debug.
 apt-get update -qq
 apt-get install -y --no-install-recommends git vim >/dev/null
-
-phase clone-repo
-# REPO_URL and REPO_REF are injected by iso/build-iso.sh at the top of the
-# wrapped script (so changing the repo URL / pinned commit doesn't require
-# editing this file).
-: "${REPO_URL:?REPO_URL must be defined by the wrapper}"
-: "${REPO_REF:?REPO_REF must be defined by the wrapper}"
-rm -rf "$PAYLOAD_DIR"
-git clone "$REPO_URL" "$PAYLOAD_DIR"
-git -C "$PAYLOAD_DIR" checkout "$REPO_REF"
-
-# secrets.env was written by the wrapper before this script's main body ran.
-# Source it for the rest of the phases, and copy it into the cloned repo
-# as .env so deploy-range.sh / install-monitoring.sh find it.
-if [[ -f "$SECRETS_FILE" ]]; then
-  set -a; source "$SECRETS_FILE"; set +a
-  install -m 600 "$SECRETS_FILE" "$PAYLOAD_DIR/.env"
-fi
 
 phase install-tailscale-on-host
 # Operator can immediately ssh root@<host> via Tailscale once this finishes.
