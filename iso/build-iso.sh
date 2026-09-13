@@ -163,13 +163,35 @@ echo "    source: ${GIT_BRANCH} @ ${GIT_DESC}${GIT_DIRTY}"
 echo "    payload: $(du -h "$REPO_TGZ" | cut -f1) ($(stat -c '%s' "$REPO_TGZ") bytes)"
 
 # ---------- 4. Download Proxmox ISO (cached) ----------
-# Pinned to a specific Proxmox VE release for reproducible builds.
-# PVE 9.x is Debian 13 (Trixie) based. Ludus supports Proxmox 8 and 9.
-# The answer.toml in iso/answer.toml.j2 validates unchanged on both
-# 8.4 and 9.2 (all keys already kebab-case).
-# To build against a different release, set PROXMOX_ISO_URL and use a
-# matching proxmox-auto-install-assistant (8.x <-> bookworm, 9.x <-> trixie).
-: "${PROXMOX_ISO_URL:=https://enterprise.proxmox.com/iso/proxmox-ve_9.2-1.iso}"
+# PROXMOX_VERSION picks the release. Ludus supports Proxmox 8 and 9, and
+# iso/answer.toml.j2 validates unchanged on both (all keys kebab-case).
+#
+# DEFAULT IS 8.4-1, NOT THE NEWEST. That is deliberate: PXE booting loads
+# the ENTIRE ISO into the initramfs (iPXE serves it as a second initrd named
+# proxmox.iso), so the ISO's size is charged directly against the target's
+# RAM. Measured, PXE-booting the same machine under QEMU:
+#
+#   Proxmox   initrd (unpacked) + ISO  = initramfs     PXE @ 5.5 GB RAM
+#   8.4-1     202 MiB           1.46 GiB  1.66 GiB     boots
+#   9.2-1     344 MiB           1.59 GiB  1.93 GiB     FAILS
+#
+# 9.2 needs ~270 MiB more, and the kernel holds both the compressed image
+# and the unpacked copy, so peak demand grows by roughly double that. The
+# failure mode is ugly and misleading: "Initramfs unpacking failed: write
+# error", after which the installer takes its PXE branch, fails to loop-
+# mount the truncated /proxmox.iso, and reports "no device with valid ISO
+# found, please check your installation medium" -- which sounds like a bad
+# USB stick and is not.
+#
+# USB/CD boot does NOT pay this cost (the ISO stays on the medium) and runs
+# fine on 4 GB. So: booting from USB, or a PXE target with >= 8 GB? Set
+# PROXMOX_VERSION=9.2-1. PXE booting a smaller box? Leave it at 8.4-1.
+#
+# Whichever you pick, proxmox-auto-install-assistant does NOT need to match
+# it -- PAI 8.4.6 bakes a 9.2 ISO correctly. scripts/install-pai.sh chooses
+# the PAI build by your glibc, not by this.
+: "${PROXMOX_VERSION:=8.4-1}"
+: "${PROXMOX_ISO_URL:=https://enterprise.proxmox.com/iso/proxmox-ve_${PROXMOX_VERSION}.iso}"
 PROXMOX_ISO_NAME="$(basename "$PROXMOX_ISO_URL")"
 PROXMOX_ISO="${CACHE_DIR}/${PROXMOX_ISO_NAME}"
 if [[ ! -f "$PROXMOX_ISO" ]]; then

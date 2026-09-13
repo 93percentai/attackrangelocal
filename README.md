@@ -42,7 +42,9 @@ That's it. The wizard will:
    Tailscale keys, AD passwords, target install disk, etc.
    — with descriptions, defaults, and per-field validation
 3. Write `.env` (chmod 600)
-4. Download the Proxmox VE 9.2 ISO (~1.6 GB, cached at `iso/cache/`)
+4. Download the Proxmox VE ISO (~1.5 GB, cached at `iso/cache/`) — 8.4-1 by
+   default; see `PROXMOX_VERSION` in `.env` before switching to 9.x if you
+   PXE boot
 5. Bake `attackrangelocal-<RANGE_ID>-<DATE>.iso` at `iso/build/`
 6. Print the `dd` command to flash to a USB stick
 
