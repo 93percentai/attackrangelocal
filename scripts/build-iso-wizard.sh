@@ -390,7 +390,7 @@ write_env() {
     [RANGE_MODE]=full
     [PROXMOX_FQDN]=ludus-attackrangelocal.range.local
     [DISK_DEVICE]=nvme0n1
-    [PROXMOX_VERSION]=8.4-1
+    [PROXMOX_VERSION]=9.2-1
     [ELASTIC_VERSION]=8.19.5
     [MALWARE_ARCHIVE_PASSWORD]=infected
     [SKIP_MALWARE_SAMPLES]=0

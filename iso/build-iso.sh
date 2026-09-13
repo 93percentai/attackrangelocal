@@ -166,31 +166,28 @@ echo "    payload: $(du -h "$REPO_TGZ" | cut -f1) ($(stat -c '%s' "$REPO_TGZ") b
 # PROXMOX_VERSION picks the release. Ludus supports Proxmox 8 and 9, and
 # iso/answer.toml.j2 validates unchanged on both (all keys kebab-case).
 #
-# DEFAULT IS 8.4-1, NOT THE NEWEST. That is deliberate: PXE booting loads
-# the ENTIRE ISO into the initramfs (iPXE serves it as a second initrd named
-# proxmox.iso), so the ISO's size is charged directly against the target's
-# RAM. Measured, PXE-booting the same machine under QEMU:
+# If you PXE boot, read docs/unattended-iso.md#pxe-booting first. PXE loads
+# the ENTIRE ISO into the target's RAM as an initramfs, so the ISO's size is
+# charged directly against the client's memory -- roughly 3x the initramfs
+# size is needed. Measured:
 #
-#   Proxmox   initrd (unpacked) + ISO  = initramfs     PXE @ 5.5 GB RAM
-#   8.4-1     202 MiB           1.46 GiB  1.66 GiB     boots
-#   9.2-1     344 MiB           1.59 GiB  1.93 GiB     FAILS
+#   Proxmox        initrd(unpacked) + ISO = initramfs   PXE @ 5.5 GB RAM
+#   8.4-1          202 MiB   1.46 GiB       1.66 GiB    boots
+#   9.2-1          344 MiB   1.59 GiB       1.93 GiB    FAILS
+#   9.2-1 (no /boot) 344 MiB 1.50 GiB       1.83 GiB    boots
 #
-# 9.2 needs ~270 MiB more, and the kernel holds both the compressed image
-# and the unpacked copy, so peak demand grows by roughly double that. The
-# failure mode is ugly and misleading: "Initramfs unpacking failed: write
-# error", after which the installer takes its PXE branch, fails to loop-
-# mount the truncated /proxmox.iso, and reports "no device with valid ISO
-# found, please check your installation medium" -- which sounds like a bad
-# USB stick and is not.
+# The third row is the fix, and it belongs in the PXE server, not here: on
+# PXE the kernel and initrd are served as their own files, so the copies
+# inside the ISO's /boot are pure duplication. Dropping them is 92 MiB and
+# was enough to boot 9.2 at the memory where the full ISO failed. This ISO
+# keeps /boot because it must also boot from USB.
 #
-# USB/CD boot does NOT pay this cost (the ISO stays on the medium) and runs
-# fine on 4 GB. So: booting from USB, or a PXE target with >= 8 GB? Set
-# PROXMOX_VERSION=9.2-1. PXE booting a smaller box? Leave it at 8.4-1.
+# USB boot pays none of this -- the ISO stays on the stick and 4 GB is fine.
 #
-# Whichever you pick, proxmox-auto-install-assistant does NOT need to match
-# it -- PAI 8.4.6 bakes a 9.2 ISO correctly. scripts/install-pai.sh chooses
-# the PAI build by your glibc, not by this.
-: "${PROXMOX_VERSION:=8.4-1}"
+# proxmox-auto-install-assistant does NOT need to match this version: PAI
+# 9.2.8 bakes an 8.4 ISO and PAI 8.4.6 bakes a 9.2 ISO. scripts/install-pai.sh
+# picks the PAI build from your glibc, not from this.
+: "${PROXMOX_VERSION:=9.2-1}"
 : "${PROXMOX_ISO_URL:=https://enterprise.proxmox.com/iso/proxmox-ve_${PROXMOX_VERSION}.iso}"
 PROXMOX_ISO_NAME="$(basename "$PROXMOX_ISO_URL")"
 PROXMOX_ISO="${CACHE_DIR}/${PROXMOX_ISO_NAME}"

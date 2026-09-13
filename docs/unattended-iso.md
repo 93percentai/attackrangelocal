@@ -16,8 +16,8 @@ Three stages baked into one ISO:
 ### Stage A — Proxmox auto-install
 
 Proxmox VE ships an [auto-installer](https://pve.proxmox.com/wiki/Automated_Installation)
-(default **PVE 8.4-1**, set by `PROXMOX_VERSION`; validated on 8.4 and 9.2 —
-see [PXE booting](#pxe-booting) before choosing 9.x)
+(default **PVE 9.2-1**, set by `PROXMOX_VERSION`; validated on 8.4 and 9.2 —
+see [PXE booting](#pxe-booting) if you netboot)
 that consumes a TOML answer file (`iso/answer.toml.j2`, rendered from your
 `.env` at build time) and a custom first-boot script. `iso/build-iso.sh`
 wraps the official `proxmox-auto-install-assistant` tool to bake both into
@@ -150,8 +150,10 @@ scripts/deploy-range.sh
 
 ## PXE booting
 
-PXE is supported, but it changes the memory maths completely, because iPXE
-hands the kernel **two** initrds:
+PXE works, but the memory maths is completely different from USB, and the
+failure mode when you run out is actively misleading.
+
+iPXE hands the kernel **two** initrds:
 
 ```
 kernel  .../linux26 initrd=initrd.img ramdisk_size=... proxmox-start-auto-installer
@@ -159,21 +161,47 @@ initrd  .../initrd.img
 initrd  .../<the ISO> proxmox.iso      <- the whole ISO becomes /proxmox.iso
 ```
 
-The installer's `init` looks for `/proxmox.iso` first and only scans block
-devices if it is absent. So on PXE the entire ISO has to be unpacked into
-the initramfs, in RAM, before anything runs. Booting from USB does not pay
-this — the ISO stays on the stick.
+The installer's `init` checks `/proxmox.iso` first and only scans block
+devices if it is absent, so on PXE the entire ISO must be unpacked into the
+initramfs, in RAM, before anything runs. USB boot never pays this — the ISO
+stays on the stick, and 4 GB is plenty.
 
-Measured by PXE-booting the same VM at the same RAM:
+Measured by PXE-booting the same VM at the same memory size:
 
-| Proxmox | initrd (unpacked) | ISO | initramfs | PXE @ 4 GB | @ 5.5 GB | @ 6 GB |
-|---|---:|---:|---:|---|---|---|
-| 8.4-1 | 202 MiB | 1.46 GiB | **1.66 GiB** | fails | **boots** | boots |
-| 9.2-1 | 344 MiB | 1.59 GiB | **1.93 GiB** | fails | **fails** | boots |
+| ISO served | initrd (unpacked) | ISO | initramfs | @4 GB | @5 GB | @5.5 GB | @6 GB |
+|---|---:|---:|---:|---|---|---|---|
+| 8.4-1 | 202 MiB | 1.46 GiB | 1.66 GiB | fails | fails | **boots** | boots |
+| 9.2-1 | 344 MiB | 1.59 GiB | 1.93 GiB | fails | fails | **fails** | boots |
+| 9.2-1, `/boot` stripped | 344 MiB | 1.50 GiB | 1.83 GiB | — | — | **boots** | — |
 
-That ~270 MiB of extra initramfs is why `PROXMOX_VERSION` defaults to
-**8.4-1**. Set `PROXMOX_VERSION=9.2-1` if you boot from USB, or if your PXE
-target has 8 GB or more.
+Rule of thumb from those points: you need roughly **3× the initramfs size**
+in client RAM. ~6 GB for a stock 9.2 ISO, ~5 GB for 8.4.
+
+### Fixing this in the PXE server
+
+The third row is the fix, and it belongs in the PXE server rather than here.
+On PXE the kernel and initrd are served as their own files, so the copies
+inside the ISO's `/boot` (`linux26` 16 MiB + `initrd.img` 56 MiB, 92 MiB of
+ISO once filesystem overhead is counted) are pure duplication — downloaded,
+held in RAM by iPXE, and unpacked into the initramfs for nothing.
+
+Strip them from the copy you serve as `proxmox.iso`:
+
+```bash
+xorriso -indev proxmox-ve_9.2-1.iso -outdev pxe-proxmox.iso \
+        -boot_image any keep -rm_r /boot -- -commit
+```
+
+That alone booted 9.2 at the memory where the stock ISO failed. Do it to the
+*served* copy only — this repo's ISO keeps `/boot` because it must also boot
+from USB.
+
+Two things not worth doing: compressing the ISO (it is ~97% squashfs and
+`.deb`s already, so zstd buys 2%), and serving it as a network block device
+(the installer initrd ships `iscsi_tcp.ko` and `nbd.ko` but no userspace
+initiator — its own comment says "we have no iscsi daemon").
+
+If you cannot change the PXE server, set `PROXMOX_VERSION=8.4-1` in `.env`.
 
 ### "no device with valid ISO found" on PXE
 
@@ -189,9 +217,5 @@ found proxmox ISO image inside initrd image
 Read it bottom-up. The unpack ran out of memory, so `/proxmox.iso` is
 truncated; the installer still takes its PXE branch because the path exists,
 fails to loop-mount it, and then reports the generic "check your
-installation medium". **Your media is fine** — the installer never scanned
-any device, because that only happens in the `else` branch.
-
-Fixes, in order of preference: give the target more RAM; set
-`PROXMOX_VERSION=8.4-1` (smaller by ~270 MiB of initramfs); or boot from USB
-instead, which needs about 4 GB.
+installation medium". **Your media is fine** — no device was ever scanned,
+because scanning only happens in the `else` branch.
